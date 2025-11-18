@@ -1,0 +1,8 @@
+aiogram==3.12.0
+python-dotenv
+openai>=1.30.0
+faster-whisper
+ffmpeg-python
+pydub
+requests
+pytube
