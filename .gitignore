@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment
+.env
+.venv/
+env/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Project output
+1_input/
+2_audio/
+3_whisper/
+4_translated/
+5_chunks/
+6_output/
+*.mp4
+*.wav
+*.mp3
+*.json
