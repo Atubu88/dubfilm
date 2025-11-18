@@ -12,49 +12,57 @@ def get_wav_duration(path):
         return w.getnframes() / float(w.getframerate())
 
 
-def merge_audio():
-    print("🎚 Starting MERGE_AUDIO (fixed WAV only)…")
+def create_silence(path, seconds):
+    """Create silent WAV of given duration."""
+    rate = 16000
+    frames = int(rate * seconds)
 
-    # ищем tts_fixed_XXX.wav
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x00\x00" * frames)
+
+
+def merge_audio():
+    print("🎚 Starting MERGE_AUDIO with real pauses…")
+
     fixed_wavs = sorted(
-        [f for f in os.listdir(OUTPUT_DIR) if f.startswith("tts_fixed_") and f.endswith(".wav")]
+        [f for f in os.listdir(OUTPUT_DIR) if f.startswith("tts_") and f.endswith(".wav")]
     )
 
     if not fixed_wavs:
-        print("❌ ERROR: No stretched TTS WAV files found in 6_output/")
-        print("   👉 Run: python -m pipeline.stretch_audio")
+        print("❌ ERROR: No TTS WAV files found in 6_output/")
         return
 
-    print(f"🔍 Found {len(fixed_wavs)} stretched WAV files")
-
-    # загружаем чанк-тайминги
     chunks = sorted([f for f in os.listdir(CHUNKS_DIR) if f.endswith(".json")])
-
     if not chunks:
-        print("❌ ERROR: No chunk JSON files in 5_chunks/")
+        print("❌ ERROR: No chunk JSON files!")
         return
 
-    # список аудио-компонентов ffmpeg concat
     concat_list_path = os.path.join(OUTPUT_DIR, "concat_list.txt")
+
     with open(concat_list_path, "w", encoding="utf-8") as listfile:
-
-        for chunk_json in chunks:
+        for i, chunk_json in enumerate(chunks):
             idx = chunk_json.replace("chunk_", "").replace(".json", "")
+            wav_path = os.path.join(OUTPUT_DIR, f"tts_{idx}.wav")
 
-            # нужный файл
-            wav_path = os.path.join(OUTPUT_DIR, f"tts_fixed_{idx}.wav")
-            if not os.path.exists(wav_path):
-                print(f"❌ Missing stretched WAV: tts_fixed_{idx}.wav — SKIPPING")
-                continue
-
-            # добавляем в список
             listfile.write(f"file '{wav_path}'\n")
 
-            print(f"   🔗 Added: tts_fixed_{idx}.wav "
-                  f"({get_wav_duration(wav_path):.2f}s)")
+            # calculate pauses
+            with open(os.path.join(CHUNKS_DIR, chunk_json), "r", encoding="utf-8") as f:
+                data = json.load(f)
 
-    # финальный merge
-    print("\n🚀 Running FFmpeg concat…")
+            if i < len(chunks) - 1:
+                next_data = json.load(open(os.path.join(CHUNKS_DIR, chunks[i+1])))
+
+                pause = next_data["start"] - data["end"]
+                if pause > 0.05:  # ignore micro gaps
+                    silence_path = os.path.join(OUTPUT_DIR, f"silence_{idx}.wav")
+                    create_silence(silence_path, pause)
+                    listfile.write(f"file '{silence_path}'\n")
+
+    print("🚀 Running FFmpeg concat…")
 
     cmd = [
         "ffmpeg",
@@ -68,22 +76,8 @@ def merge_audio():
         FINAL_AUDIO
     ]
 
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-    if proc.stdout:
-        print(proc.stdout)
-    if proc.stderr:
-        print(proc.stderr)
-
-    if proc.returncode != 0:
-        print("❌ FFmpeg concat ERROR!")
-        return
-
-    if os.path.exists(FINAL_AUDIO):
-        print(f"🎉 FINAL AUDIO READY → {FINAL_AUDIO}")
-        print(f"🎧 Duration: {get_wav_duration(FINAL_AUDIO):.2f}s")
-    else:
-        print("❌ ERROR: final_audio.wav was NOT created!")
+    subprocess.run(cmd)
+    print("🎉 FINAL_AUDIO ready!")
 
 
 if __name__ == "__main__":

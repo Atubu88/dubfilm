@@ -1,117 +1,96 @@
 import os
-import wave
 import json
-import shutil
 import subprocess
-from config import CHUNKS_DIR, OUTPUT_DIR
-
-FIXED_PREFIX = "tts_"
-OUT_PREFIX = "tts_fixed_"
+import wave
+from config import OUTPUT_DIR, CHUNKS_DIR
 
 
 def get_wav_duration(path):
-    """Возвращает длительность WAV."""
     with wave.open(path, "rb") as w:
-        frames = w.getnframes()
-        rate = w.getframerate()
-        return frames / float(rate)
-
-
-def ffmpeg_apply(input_f, output_f, tempo):
-    """Один шаг растяжения/сжатия аудио."""
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", input_f,
-        "-af", f"atempo={tempo}",
-        output_f
-    ]
-
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-
-    if result.returncode != 0 or not os.path.exists(output_f):
-        print("❌ FFmpeg ERROR during audio stretch!")
-        print("Command:", " ".join(cmd))
-        print("stderr:", result.stderr)
-        raise RuntimeError("FFmpeg failed")
-
-
-def ffmpeg_stretch(input_path, output_path, factor):
-    """
-    Растянуть/сжать WAV c ограничениями atempo (0.5–2.0).
-    """
-    current = input_path
-    remaining = factor
-
-    # Дробим на шаги, если factor >2 или <0.5
-    while remaining > 2.0 or remaining < 0.5:
-        step = 2.0 if remaining > 1 else 0.5
-        tmp = output_path + ".tmp.wav"
-
-        ffmpeg_apply(current, tmp, step)
-
-        remaining /= step
-        current = tmp
-
-    # Финальный шаг
-    ffmpeg_apply(current, output_path, remaining)
-
-    # Чистим TMP
-    tmp = output_path + ".tmp.wav"
-    if os.path.exists(tmp):
-        os.remove(tmp)
+        return w.getnframes() / float(w.getframerate())
 
 
 def stretch_audio():
-    print("🎚 Starting audio stretching...")
+    print("🎚 Starting NEW stretch_audio…")
 
-    chunks = sorted(f for f in os.listdir(CHUNKS_DIR) if f.endswith(".json"))
+    wav_files = sorted([f for f in os.listdir(OUTPUT_DIR) if f.startswith("tts_") and f.endswith(".wav")])
+    chunks = sorted([f for f in os.listdir(CHUNKS_DIR) if f.endswith(".json")])
 
-    if not chunks:
-        print("❌ No chunks in 5_chunks/")
-        return
+    for idx, wav_name in enumerate(wav_files):
+        json_name = chunks[idx]
 
-    for name in chunks:
-        with open(os.path.join(CHUNKS_DIR, name), "r", encoding="utf-8") as f:
+        wav_path = os.path.join(OUTPUT_DIR, wav_name)
+        json_path = os.path.join(CHUNKS_DIR, json_name)
+
+        # load whisper timing
+        with open(json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        idx = name.replace("chunk_", "").replace(".json", "")
+        original_dur = data["end"] - data["start"]
+        tts_dur = get_wav_duration(wav_path)
 
-        src = os.path.join(OUTPUT_DIR, f"{FIXED_PREFIX}{idx}.wav")
-        dst = os.path.join(OUTPUT_DIR, f"{OUT_PREFIX}{idx}.wav")
+        print(f"\n🔍 Chunk {idx+1}:")
+        print(f"   Whisper target: {original_dur:.2f}s")
+        print(f"   TTS duration:    {tts_dur:.2f}s")
 
-        if not os.path.exists(src):
-            print(f"❌ No TTS WAV for chunk {idx} → skipping")
+        # NEW RULE:
+        # If the TTS is shorter than 70% — stretch MAX 30%, NOT fully.
+        min_allowed = original_dur * 0.70
+
+        if tts_dur < min_allowed:
+            # max 30% stretch
+            stretched_target = tts_dur * 1.3
+            silence_needed = original_dur - stretched_target
+
+            print("   ⚠ TTS too short — using LIMITED stretch + silence")
+            print(f"   🎧 New stretched duration: {stretched_target:.2f}s")
+            print(f"   🕒 Silence needed:          {silence_needed:.2f}s")
+
+            stretched_path = wav_path.replace("tts_", "tts_fixed_")
+            silence_path = stretched_path.replace(".wav", "_silence.wav")
+
+            # Stretch only 30%
+            tempo = tts_dur / stretched_target
+
+            subprocess.run([
+                "ffmpeg", "-y",
+                "-i", wav_path,
+                "-filter:a", f"atempo={tempo}",
+                stretched_path
+            ])
+
+            # Create silence for remaining time
+            if silence_needed > 0:
+                rate = 16000
+                frames = int(rate * silence_needed)
+                with wave.open(silence_path, "wb") as w:
+                    w.setnchannels(1)
+                    w.setsampwidth(2)
+                    w.setframerate(rate)
+                    w.writeframes(b"\x00\x00" * frames)
+
             continue
 
-        tgt = data["end"] - data["start"]
-        cur = get_wav_duration(src)
+        # NORMAL CASE (small corrections)
+        stretch_factor = original_dur / tts_dur
 
-        print(f"\n🔍 Chunk {idx}:")
-        print(f"   Whisper target: {tgt:.2f}s")
-        print(f"   TTS duration:    {cur:.2f}s")
+        # ffmpeg tempo = speed, so we invert
+        tempo = 1.0 / stretch_factor
 
-        # Разница менее 30 мс — копируем
-        if abs(cur - tgt) < 0.03:
-            print("   ✅ Duration OK — copying")
-            shutil.copy(src, dst)
-            continue
+        print(f"   🎛 Stretch factor: {stretch_factor:.3f}")
+        print(f"   🎚 FFmpeg tempo:   {tempo:.3f}")
 
-        factor = tgt / cur
-        print(f"   🎛 Stretch factor: {factor:.3f}")
+        stretched_path = wav_path.replace("tts_", "tts_fixed_")
 
-        # Выполняем растяжение
-        ffmpeg_stretch(src, dst, factor)
-
-        new = get_wav_duration(dst)
-        print(f"   🎧 New duration: {new:.2f}s")
-
-        if not os.path.exists(dst) or new < 0.01:
-            print(f"❌ ERROR: failed to create {dst}")
-            raise RuntimeError("Stretching failed")
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-i", wav_path,
+            "-filter:a", f"atempo={tempo}",
+            stretched_path
+        ])
 
     print("\n🟢 ALL TTS FIXED → ready for merge_audio()")
+
+
+if __name__ == "__main__":
+    stretch_audio()
