@@ -16,6 +16,10 @@ def translate_segments(
     🔹 Отправляет GPT запрос на перевод
     🔹 Сохраняет новый JSON с 'src' + 'dst'
     🔹 Проверяет корректность
+
+    ⚠️ Сегментация строго сохраняется — модель получает JSON и обязана
+       вернуть JSON того же размера. Так мы исключаем потери сегментов,
+       которые раньше возникали при парсинге пронумерованных строк.
     """
 
     whisper_path = os.path.join(WHISPER_DIR, whisper_json)
@@ -27,55 +31,68 @@ def translate_segments(
 
     print(f"📖 Loaded {len(segments)} segments for translation")
 
-    # 🧠 Формируем список строк с номерами
-    numbered_list = "\n".join(
-        f"{i+1}. {seg['text']}"
-        for i, seg in enumerate(segments)
-    )
+    # 🧠 Отправляем JSON, чтобы исключить двусмысленности при парсинге
+    payload = {
+        "target_lang": target_lang,
+        "segments": [
+            {
+                "id": seg["id"],
+                "text": seg["text"]
+            }
+            for seg in segments
+        ]
+    }
 
-    system_prompt = f"""
-You are a professional translator.
-Translate Arabic speech into {target_lang}.
-⚠️ RULES:
-- KEEP SEGMENT ORDER
-- DO NOT MERGE segments
-- DO NOT ADD segments
-- The output MUST be a numbered list 1:N
-Example:
-1. text...
-2. text...
-"""
+    system_prompt = (
+        "You are a professional translator. Translate the provided segments "
+        f"into {target_lang} and keep the order EXACTLY the same. "
+        "Respond ONLY with JSON that matches the schema: "
+        '{"segments": [{"id": <int>, "dst": "translated"}]}'
+    )
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
+        response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": numbered_list}
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}
         ]
     )
 
-    translated_text = response.choices[0].message.content.strip()
+    try:
+        translated_payload = json.loads(response.choices[0].message.content)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"❌ GPT returned invalid JSON: {exc}") from exc
 
-    # 🧩 ПАРСИМ НАЗАД В МАССИВ
-    translated_lines = [
-        line.split(". ", 1)[1]   # Удаляем "1. "
-        for line in translated_text.split("\n")
-        if ". " in line
-    ]
+    translated_lines = translated_payload.get("segments")
+
+    if not isinstance(translated_lines, list):
+        raise RuntimeError("❌ GPT JSON has no 'segments' list")
 
     if len(translated_lines) != len(segments):
-        raise RuntimeError(f"❌ GPT LOST SEGMENTS ({len(translated_lines)} vs {len(segments)})")
+        raise RuntimeError(
+            f"❌ GPT LOST SEGMENTS ({len(translated_lines)} vs {len(segments)})"
+        )
 
     # 🏗 СТРОИМ НОВЫЙ JSON
     translated_segments = []
 
-    for seg, dst in zip(segments, translated_lines):
+    for seg, translated in zip(segments, translated_lines):
+        if seg["id"] != translated.get("id"):
+            raise RuntimeError(
+                f"❌ GPT misaligned IDs: expected {seg['id']} got {translated.get('id')}"
+            )
+
+        dst_text = translated.get("dst", "").strip()
+        if not dst_text:
+            raise RuntimeError(f"❌ Empty translation for segment {seg['id']}")
+
         translated_segments.append({
             "id": seg["id"],
             "start": seg["start"],
             "end": seg["end"],
             "src": seg["text"],
-            "dst": dst.strip()
+            "dst": dst_text
         })
 
     os.makedirs(TRANSLATION_DIR, exist_ok=True)
