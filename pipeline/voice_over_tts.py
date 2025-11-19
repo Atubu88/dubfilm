@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import List
 
 from openai import OpenAI
-from pydub import AudioSegment
+from pydub import AudioSegment, effects
 
 from config import OPENAI_API_KEY, OUTPUT_DIR, TRANSLATION_DIR, WHISPER_DIR
 
@@ -94,13 +94,45 @@ def synthesize_text_to_audio(text: str) -> AudioSegment:
         model="gpt-4o-mini-tts",
         voice="nova",
         input=text,
+        response_format="wav",
     )
 
     audio_bytes = response.read()
     buffer = io.BytesIO(audio_bytes)
-    audio = AudioSegment.from_file(buffer, format="mp3")
+    audio = AudioSegment.from_file(buffer, format="wav")
+
+    # --- BASIC SETUP ---
     audio = audio.set_channels(1).set_frame_rate(TARGET_SAMPLE_RATE)
-    return audio
+
+    # --- ANIME FX START ----------------------------------------------
+    # Slight pitch-up (≈ +1.8 semitone), keeps voice anime-like but natural
+    pitched = audio._spawn(
+        audio.raw_data,
+        overrides={"frame_rate": int(audio.frame_rate * 1.12)},
+    ).set_frame_rate(TARGET_SAMPLE_RATE)
+
+    # Smile-EQ (подчеркнутая середина и воздух)
+    eq = pitched.high_pass_filter(100).low_pass_filter(13500)
+
+    # Small presence boost (аниме-яркость)
+    eq = eq + 2  # легкое повышение громкости высоких & середины
+
+    # Gentle compression (яркий мультяшный звук, не радио)
+    eq = effects.compress_dynamic_range(eq, threshold=-22.0, ratio=2.0)
+
+    # Mini-reverb (аниме-комната)
+    reverb_tail = AudioSegment.silent(duration=8).overlay(eq - 12)
+    anime = eq.overlay(reverb_tail)
+
+    # Fade in/out (плавные мультяшные атаки)
+    anime = anime.fade_in(8).fade_out(10)
+
+    # Normalize
+    anime = effects.normalize(anime, headroom=1.5)
+    # --- ANIME FX END ------------------------------------------------
+
+    return anime
+
 
 
 def build_atempo_chain(ratio: float) -> str:
