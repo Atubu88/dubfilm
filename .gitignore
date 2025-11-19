@@ -17,14 +17,22 @@ venv/
 # OS
 .DS_Store
 
-# Project output
-1_input/
-2_audio/
-3_whisper/
-4_translated/
-5_chunks/
-6_output/
-*.mp4
-*.wav
-*.mp3
-*.json
+# Input/Output media (large files — exclude)
+1_input/*.mp4
+2_audio/*.wav
+6_output/*.wav
+6_output/*.mp3
+6_output/*.mp4
+
+# Temporary audio/video chunks (large)
+5_chunks/*.wav
+
+# Generated subtitles/audio timing (KEEP JSON)
+# KEEP 3_whisper/transcript.json
+3_whisper/*.txt
+
+# KEEP 4_translated/translated.json
+4_translated/*.txt
+
+# KEEP 5_chunks/*.json
+5_chunks/*.txt
