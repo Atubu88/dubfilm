@@ -1,8 +1,27 @@
 import os
 import sys
 import subprocess
+import shutil
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(ROOT, "6_output")
+
+
+def clean_output():
+    """Удаляет ВСЕ файлы из 6_output, но не папку."""
+    print("🧹 Cleaning 6_output/...")
+
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
+
+    for f in os.listdir(OUTPUT_DIR):
+        path = os.path.join(OUTPUT_DIR, f)
+        try:
+            os.remove(path)
+        except IsADirectoryError:
+            shutil.rmtree(path)
+
+    print("✔ 6_output cleaned!")
 
 
 def run(cmd):
@@ -25,6 +44,9 @@ def main():
     print(f"🎥 Input video: {input_video}")
     print(f"🌐 Target language: {lang}")
 
+    # 0. Clean output
+    clean_output()
+
     # 1. Extract original audio
     run(f"python -m pipeline.extract_audio {input_video}")
 
@@ -43,13 +65,13 @@ def main():
     # 6. Stretch TTS to match timing
     run("python -m pipeline.stretch_audio")
 
-    # ❌ REMOVE THIS — NO VOICE REMOVAL
+    # ❌ REMOVE_VOICE отключено — мы сохраняем звуки
     # run("python -m pipeline.remove_voice")
 
-    # 7. Merge stretched TTS + silence pauses → final_audio.wav
+    # 7. Merge stretched TTS + pauses
     run("python -m pipeline.merge_audio")
 
-    # 8. Combine: video + original sound + TTS (ducking)
+    # 8. Mix original SFX + translated voice
     run(f"python -m pipeline.merge_video {input_video}")
 
     print("\n🎉 ALL DONE!")
