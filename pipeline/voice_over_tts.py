@@ -88,33 +88,69 @@ def load_original_duration(segments: List[Segment]) -> float:
     return max((seg.end for seg in segments), default=0.0)
 
 
+def apply_loudness_drift(audio: AudioSegment, depth_db=1.0) -> AudioSegment:
+    import random
+    from pydub.effects import compress_dynamic_range
+
+    drifted = AudioSegment.empty()
+    chunk_ms = 120  # маленькие порции для «живости»
+
+    for i in range(0, len(audio), chunk_ms):
+        chunk = audio[i:i+chunk_ms]
+        shift = random.uniform(-depth_db, depth_db)
+        drifted += chunk + shift
+
+    return drifted
+
+
+def add_presence(audio: AudioSegment) -> AudioSegment:
+    return audio + audio.high_pass_filter(180) - 2  # +presence, но мягко
+
+
+
+def apply_random_eq(audio: AudioSegment) -> AudioSegment:
+    import random
+    low = random.uniform(70, 110)
+    high = random.uniform(11500, 13500)
+    return audio.high_pass_filter(low).low_pass_filter(high)
+
+
+
 def synthesize_text_to_audio(text: str) -> AudioSegment:
     print(f"🔊 Synthesizing TTS for: {text[:60]}{'…' if len(text) > 60 else ''}")
     response = client.audio.speech.create(
         model="gpt-4o-mini-tts",
         voice="echo",
         input=text,
-        response_format="wav",  # keep full fidelity before post-processing
+        response_format="wav",
     )
 
     audio_bytes = response.read()
     buffer = io.BytesIO(audio_bytes)
     audio = AudioSegment.from_file(buffer, format="wav")
 
-    # Subtle mastering to warm up and humanize the voice without changing timing.
+    # ---- базовая обработка ----
     audio = audio.set_channels(1).set_frame_rate(TARGET_SAMPLE_RATE)
     audio = audio.fade_in(5).fade_out(15)
-    audio = effects.normalize(audio, headroom=1.5)
+
+    audio = effects.normalize(audio, headroom=1.2)
     audio = effects.compress_dynamic_range(
         audio,
-        threshold=-26.0,
-        ratio=2.3,
-        attack=8,
-        release=120,
+        threshold=-27.0,
+        ratio=2.2,
+        attack=6,
+        release=140,
     )
-    # Gentle EQ: clean sub-rumble and soften harsh highs for a warmer, more cinematic tone.
-    audio = audio.high_pass_filter(80).low_pass_filter(12000)
+
+    # ---- добавляем "живость" ----
+    audio = apply_loudness_drift(audio, depth_db=0.8)
+    audio = add_presence(audio)
+
+    # ---- лёгкая вариативность EQ для естественности ----
+    audio = apply_random_eq(audio)
+
     return audio
+
 
 
 def build_atempo_chain(ratio: float) -> str:
@@ -180,11 +216,11 @@ def match_duration(audio: AudioSegment, target_ms: int) -> AudioSegment:
 
 
 def place_segments_on_timeline(segments: List[Segment], total_duration: float) -> AudioSegment:
-    timeline_duration_ms = int(math.ceil(total_duration * 1000)) + SILENCE_TAIL_MS
-    print(f"🧱 Building voice-over timeline of {timeline_duration_ms / 1000:.2f}s")
-    final_audio = AudioSegment.silent(duration=timeline_duration_ms, frame_rate=TARGET_SAMPLE_RATE)
+    sorted_segments = sorted(segments, key=lambda s: s.start)
+    placements = []
+    current_position_ms = 0
 
-    for seg in segments:
+    for seg in sorted_segments:
         target_ms = seg.duration_ms
         if target_ms <= 0:
             continue
@@ -192,10 +228,23 @@ def place_segments_on_timeline(segments: List[Segment], total_duration: float) -
         synthesized = synthesize_text_to_audio(seg.text)
         stretched = match_duration(synthesized, target_ms)
 
-        position_ms = int(seg.start * 1000)
+        requested_start_ms = int(seg.start * 1000)
+        position_ms = max(requested_start_ms, current_position_ms)
+        end_ms = position_ms + len(stretched)
+
+        placements.append((seg, stretched, position_ms))
+        current_position_ms = end_ms
+
         print(
-            f"  • Segment {seg.id}: start={seg.start:.2f}s end={seg.end:.2f}s duration={target_ms / 1000:.2f}s"
+            f"  • Segment {seg.id}: start={seg.start:.2f}s end={seg.end:.2f}s "
+            f"tts={len(stretched) / 1000:.2f}s placed_at={position_ms / 1000:.2f}s"
         )
+
+    timeline_duration_ms = max(int(math.ceil(total_duration * 1000)), current_position_ms) + SILENCE_TAIL_MS
+    print(f"🧱 Building voice-over timeline of {timeline_duration_ms / 1000:.2f}s")
+    final_audio = AudioSegment.silent(duration=timeline_duration_ms, frame_rate=TARGET_SAMPLE_RATE)
+
+    for seg, stretched, position_ms in placements:
         final_audio = final_audio.overlay(stretched, position=position_ms)
 
     return final_audio
