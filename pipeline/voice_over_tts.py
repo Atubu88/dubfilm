@@ -27,6 +27,8 @@ TARGET_SAMPLE_RATE = 16000
 TOLERANCE_MS = 10
 SILENCE_TAIL_MS = 500
 
+MIN_STRETCH_RATIO = 0.9  # below this, do not stretch — just pad with silence
+
 
 @dataclass
 class Segment:
@@ -152,30 +154,15 @@ def stretch_with_ffmpeg(audio: AudioSegment, ratio: float) -> AudioSegment:
 
     return stretched
 
-
 def match_duration(audio: AudioSegment, target_ms: int) -> AudioSegment:
-    if target_ms <= 0:
-        return AudioSegment.silent(duration=0)
-
     current_ms = len(audio)
-    if current_ms == 0:
-        return AudioSegment.silent(duration=target_ms)
 
-    if abs(current_ms - target_ms) <= TOLERANCE_MS:
-        trimmed = audio[:target_ms]
-        if len(trimmed) < target_ms:
-            trimmed += AudioSegment.silent(duration=target_ms - len(trimmed))
-        return trimmed
+    # Если TTS короче окна → добавляем тишину
+    if current_ms < target_ms:
+        return audio + AudioSegment.silent(duration=target_ms - current_ms)
 
-    ratio = current_ms / target_ms
-    stretched = stretch_with_ffmpeg(audio, ratio)
-
-    if len(stretched) > target_ms:
-        stretched = stretched[:target_ms]
-    elif len(stretched) < target_ms:
-        stretched += AudioSegment.silent(duration=target_ms - len(stretched))
-
-    return stretched
+    # Если TTS длиннее → оставляем как есть (НИКОГДА не обрезаем)
+    return audio
 
 
 def place_segments_on_timeline(segments: List[Segment], total_duration: float) -> AudioSegment:
