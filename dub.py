@@ -73,7 +73,7 @@ def run_dubbing_pipeline(input_video: str, lang: str):
     run("python -m pipeline.merge_audio")
 
     # 8. Mix original SFX + translated voice
-    run(f"python -m pipeline.merge_video {input_video}")
+    run("python -m pipeline.merge_video")
 
     print("\n🎉 ALL DONE!")
     print("🍿 Final video → 6_output/final_video.mp4")
@@ -89,10 +89,10 @@ def run_voice_over_pipeline(input_video: str, lang: str):
 
     print("\n🎙 Switching to voice-over specific steps")
 
-    # Voice-over flow: synthesize the entire script in one go
+    # Voice-over flow: synthesize, mix with original bed, and mux with video
     run("python -m pipeline.voice_over_tts")
-    run("python -m pipeline.mastering")
-    run(f"python -m pipeline.merge_video {input_video}")
+    run("python -m pipeline.voice_over_mix")
+    run("python -m pipeline.merge_video --mode voice_over")
 
     print("\n🎉 VOICE-OVER DONE!")
     print("📼 Final voice-over video → 6_output/final_video.mp4")
