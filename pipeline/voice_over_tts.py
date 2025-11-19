@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import List
 
 from openai import OpenAI
-from pydub import AudioSegment
+from pydub import AudioSegment, effects
 
 from config import OPENAI_API_KEY, OUTPUT_DIR, TRANSLATION_DIR, WHISPER_DIR
 
@@ -94,12 +94,27 @@ def synthesize_text_to_audio(text: str) -> AudioSegment:
         model="gpt-4o-mini-tts",
         voice="nova",
         input=text,
+        response_format="wav",  # keep full fidelity before post-processing
     )
 
     audio_bytes = response.read()
     buffer = io.BytesIO(audio_bytes)
-    audio = AudioSegment.from_file(buffer, format="mp3")
+    audio = AudioSegment.from_file(buffer, format="wav")
+
+    # Subtle mastering to warm up and humanize the voice without changing timing.
     audio = audio.set_channels(1).set_frame_rate(TARGET_SAMPLE_RATE)
+    audio = audio.fade_in(5).fade_out(15)
+    audio = effects.normalize(audio, headroom=1.5)
+    audio = effects.compress_dynamic_range(
+        audio,
+        threshold=-26.0,
+        ratio=2.3,
+        attack=8,
+        release=120,
+        knee=6,
+    )
+    # Gentle EQ: clean sub-rumble and soften harsh highs for a warmer, more cinematic tone.
+    audio = audio.high_pass_filter(80).low_pass_filter(12000)
     return audio
 
 
