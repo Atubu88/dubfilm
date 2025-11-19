@@ -180,11 +180,11 @@ def match_duration(audio: AudioSegment, target_ms: int) -> AudioSegment:
 
 
 def place_segments_on_timeline(segments: List[Segment], total_duration: float) -> AudioSegment:
-    timeline_duration_ms = int(math.ceil(total_duration * 1000)) + SILENCE_TAIL_MS
-    print(f"🧱 Building voice-over timeline of {timeline_duration_ms / 1000:.2f}s")
-    final_audio = AudioSegment.silent(duration=timeline_duration_ms, frame_rate=TARGET_SAMPLE_RATE)
+    sorted_segments = sorted(segments, key=lambda s: s.start)
+    placements = []
+    current_position_ms = 0
 
-    for seg in segments:
+    for seg in sorted_segments:
         target_ms = seg.duration_ms
         if target_ms <= 0:
             continue
@@ -192,10 +192,23 @@ def place_segments_on_timeline(segments: List[Segment], total_duration: float) -
         synthesized = synthesize_text_to_audio(seg.text)
         stretched = match_duration(synthesized, target_ms)
 
-        position_ms = int(seg.start * 1000)
+        requested_start_ms = int(seg.start * 1000)
+        position_ms = max(requested_start_ms, current_position_ms)
+        end_ms = position_ms + len(stretched)
+
+        placements.append((seg, stretched, position_ms))
+        current_position_ms = end_ms
+
         print(
-            f"  • Segment {seg.id}: start={seg.start:.2f}s end={seg.end:.2f}s duration={target_ms / 1000:.2f}s"
+            f"  • Segment {seg.id}: start={seg.start:.2f}s end={seg.end:.2f}s "
+            f"tts={len(stretched) / 1000:.2f}s placed_at={position_ms / 1000:.2f}s"
         )
+
+    timeline_duration_ms = max(int(math.ceil(total_duration * 1000)), current_position_ms) + SILENCE_TAIL_MS
+    print(f"🧱 Building voice-over timeline of {timeline_duration_ms / 1000:.2f}s")
+    final_audio = AudioSegment.silent(duration=timeline_duration_ms, frame_rate=TARGET_SAMPLE_RATE)
+
+    for seg, stretched, position_ms in placements:
         final_audio = final_audio.overlay(stretched, position=position_ms)
 
     return final_audio
