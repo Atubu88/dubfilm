@@ -89,11 +89,8 @@ def run_voice_over_pipeline(input_video: str, lang: str):
 
     print("\n🎙 Switching to voice-over specific steps")
 
-    # Voice-over flow: re-use chunking / TTS and polish before final mux
-    run("python -m pipeline.split_chunks")
-    run("python -m pipeline.generate_tts")
-    run("python -m pipeline.stretch_audio")
-    run("python -m pipeline.merge_audio")
+    # Voice-over flow: synthesize the entire script in one go
+    run("python -m pipeline.voice_over_tts")
     run("python -m pipeline.mastering")
     run(f"python -m pipeline.merge_video {input_video}")
 
