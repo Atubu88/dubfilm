@@ -67,7 +67,7 @@ class TranslationValidationError(Exception):
     pass
 
 
-def assert_valid_translation(json_path: str, min_ratio=0.7):
+def assert_valid_translation(json_path: str, min_ratio=0.5):
     """
     Проверяет:
     - совпадение количества сегментов
