@@ -1,9 +1,15 @@
 import os
 import ffmpeg
 
-def extract_audio(video_path: str, output_dir: str) -> str:
-    filename = os.path.basename(video_path).rsplit(".", 1)[0]
-    audio_path = os.path.join(output_dir, f"{filename}.wav")
+def extract_audio(video_path: str, output_dir: str, output_name: str = "input.wav") -> str:
+    """Extract mono 16 kHz audio track from the video.
+
+    We always normalize the output name to ``input.wav`` so downstream
+    pipeline steps (Whisper, translation, etc.) consistently pick up the
+    freshly extracted audio instead of a stale file from a previous run.
+    """
+
+    audio_path = os.path.join(output_dir, output_name)
 
     try:
         (

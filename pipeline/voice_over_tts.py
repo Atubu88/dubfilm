@@ -92,47 +92,29 @@ def synthesize_text_to_audio(text: str) -> AudioSegment:
     print(f"🔊 Synthesizing TTS for: {text[:60]}{'…' if len(text) > 60 else ''}")
     response = client.audio.speech.create(
         model="gpt-4o-mini-tts",
-        voice="nova",
+        voice="echo",
         input=text,
-        response_format="wav",
+        response_format="wav",  # keep full fidelity before post-processing
     )
 
     audio_bytes = response.read()
     buffer = io.BytesIO(audio_bytes)
     audio = AudioSegment.from_file(buffer, format="wav")
 
-    # --- BASIC SETUP ---
+    # Subtle mastering to warm up and humanize the voice without changing timing.
     audio = audio.set_channels(1).set_frame_rate(TARGET_SAMPLE_RATE)
-
-    # --- ANIME FX START ----------------------------------------------
-    # Slight pitch-up (≈ +1.8 semitone), keeps voice anime-like but natural
-    pitched = audio._spawn(
-        audio.raw_data,
-        overrides={"frame_rate": int(audio.frame_rate * 1.12)},
-    ).set_frame_rate(TARGET_SAMPLE_RATE)
-
-    # Smile-EQ (подчеркнутая середина и воздух)
-    eq = pitched.high_pass_filter(100).low_pass_filter(13500)
-
-    # Small presence boost (аниме-яркость)
-    eq = eq + 2  # легкое повышение громкости высоких & середины
-
-    # Gentle compression (яркий мультяшный звук, не радио)
-    eq = effects.compress_dynamic_range(eq, threshold=-22.0, ratio=2.0)
-
-    # Mini-reverb (аниме-комната)
-    reverb_tail = AudioSegment.silent(duration=8).overlay(eq - 12)
-    anime = eq.overlay(reverb_tail)
-
-    # Fade in/out (плавные мультяшные атаки)
-    anime = anime.fade_in(8).fade_out(10)
-
-    # Normalize
-    anime = effects.normalize(anime, headroom=1.5)
-    # --- ANIME FX END ------------------------------------------------
-
-    return anime
-
+    audio = audio.fade_in(5).fade_out(15)
+    audio = effects.normalize(audio, headroom=1.5)
+    audio = effects.compress_dynamic_range(
+        audio,
+        threshold=-26.0,
+        ratio=2.3,
+        attack=8,
+        release=120,
+    )
+    # Gentle EQ: clean sub-rumble and soften harsh highs for a warmer, more cinematic tone.
+    audio = audio.high_pass_filter(80).low_pass_filter(12000)
+    return audio
 
 
 def build_atempo_chain(ratio: float) -> str:
