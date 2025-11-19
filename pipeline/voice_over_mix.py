@@ -2,10 +2,29 @@ import os
 import subprocess
 
 from config import AUDIO_DIR, OUTPUT_DIR
+from pipeline.remove_voice import remove_voice
 
 ORIGINAL_AUDIO = os.path.join(AUDIO_DIR, "input.wav")
 TTS_AUDIO = os.path.join(OUTPUT_DIR, "voice_over_tts.wav")
 VOICE_OVER_MIX = os.path.join(OUTPUT_DIR, "voice_over_audio.wav")
+BACKGROUND_SFX = os.path.join(OUTPUT_DIR, "background_sfx.wav")
+ORIGINAL_VOICE = os.path.join(OUTPUT_DIR, "original_voice.wav")
+
+
+def ensure_vocal_stems():
+    """Run vocal separation (Demucs) once so music/SFX stay clean."""
+
+    if os.path.exists(BACKGROUND_SFX) and os.path.exists(ORIGINAL_VOICE):
+        return
+
+    print("🔬 No separated stems detected — running Demucs via remove_voice.py…")
+    remove_voice()
+
+    if not os.path.exists(BACKGROUND_SFX) or not os.path.exists(ORIGINAL_VOICE):
+        raise RuntimeError(
+            "❌ Failed to generate background_sfx/original_voice stems. "
+            "Check demucs installation or run pipeline.remove_voice manually."
+        )
 
 
 def mix_voice_over_tracks():
@@ -17,18 +36,22 @@ def mix_voice_over_tracks():
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    print("🎚️ Mixing voice-over with original audio bed…")
+    ensure_vocal_stems()
+
+    print("🎚️ Mixing clean SFX bed + quiet original voice + TTS…")
 
     filter_complex = (
-        "[0:a]volume=-20dB[a0];"
-        "[a0][1:a]amix=inputs=2:duration=longest:dropout_transition=0[aout]"
+        "[1:a]volume=-20dB[origquiet];"
+        "[0:a][origquiet][2:a]amix=inputs=3:duration=longest:dropout_transition=0[aout]"
     )
 
     cmd = [
         "ffmpeg",
         "-y",
         "-i",
-        ORIGINAL_AUDIO,
+        BACKGROUND_SFX,
+        "-i",
+        ORIGINAL_VOICE,
         "-i",
         TTS_AUDIO,
         "-filter_complex",
