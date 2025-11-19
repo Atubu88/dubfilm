@@ -35,7 +35,7 @@ def generate_tts():
         # 1) Получаем MP3/ACC от OpenAI
         response = client.audio.speech.create(
             model="gpt-4o-mini-tts",
-            voice="nova",  # ← выразительный мультяшный голос
+            voice="echo",  # ← выразительный мультяшный голос
             input=text
         )
 
