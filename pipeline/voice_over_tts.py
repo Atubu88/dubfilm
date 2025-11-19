@@ -27,6 +27,8 @@ TARGET_SAMPLE_RATE = 16000
 TOLERANCE_MS = 10
 SILENCE_TAIL_MS = 500
 
+MIN_STRETCH_RATIO = 0.6  # below this, do not stretch — just pad with silence
+
 
 @dataclass
 class Segment:
@@ -168,6 +170,16 @@ def match_duration(audio: AudioSegment, target_ms: int) -> AudioSegment:
         return trimmed
 
     ratio = current_ms / target_ms
+
+    if ratio < MIN_STRETCH_RATIO:
+        # Leave original TTS untouched and only pad with silence to fill the slot.
+        padded = audio
+        if len(padded) > target_ms:
+            padded = padded[:target_ms]
+        if len(padded) < target_ms:
+            padded += AudioSegment.silent(duration=target_ms - len(padded))
+        return padded
+
     stretched = stretch_with_ffmpeg(audio, ratio)
 
     if len(stretched) > target_ms:
