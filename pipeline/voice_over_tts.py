@@ -225,12 +225,18 @@ def stretch_with_ffmpeg(audio: AudioSegment, ratio: float) -> AudioSegment:
 def match_duration(audio: AudioSegment, target_ms: int) -> AudioSegment:
     current_ms = len(audio)
 
+    # Небольшие расхождения игнорируем, чтобы не резать дыхание
+    if abs(current_ms - target_ms) <= TOLERANCE_MS:
+        return audio
+
     # Если TTS короче окна → добавляем тишину
     if current_ms < target_ms:
         return audio + AudioSegment.silent(duration=target_ms - current_ms)
 
-    # Если TTS длиннее → оставляем как есть, НИЧЕГО не режем
-    return audio
+    # Если TTS длиннее → мягко режем по целевому окну, чтобы не раздвигать таймлайн
+    trimmed = audio[:target_ms]
+    fade_out_ms = min(40, max(8, int(target_ms * 0.05)))
+    return trimmed.fade_out(fade_out_ms)
 
 
 # -------------------------------------------------------------------
