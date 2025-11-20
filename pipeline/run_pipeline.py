@@ -2,7 +2,7 @@ import os
 from helpers.downloader import download_youtube
 from pipeline.extract_audio import extract_audio
 from pipeline_guard.audio_checks import assert_valid_audio   # ⬅️ ДОБАВЛЕН
-from config import INPUT_DIR, AUDIO_DIR
+from pipeline.constants import INPUT_DIR, AUDIO_DIR
 
 
 def run_pipeline(youtube_url: str):

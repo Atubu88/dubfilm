@@ -1,7 +1,8 @@
 import json
 import os
 from openai import OpenAI
-from config import WHISPER_DIR, AUDIO_DIR, OPENAI_API_KEY
+from config import OPENAI_API_KEY
+from pipeline.constants import WHISPER_DIR, AUDIO_DIR
 from helpers.validators import assert_valid_whisper   # ← ДОБАВИЛИ
 
 client = OpenAI(api_key=OPENAI_API_KEY)

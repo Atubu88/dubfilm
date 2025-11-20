@@ -1,7 +1,7 @@
 import argparse
 import os
 import subprocess
-from config import INPUT_DIR, OUTPUT_DIR
+from pipeline.constants import INPUT_DIR, OUTPUT_DIR
 
 FINAL_WAV = os.path.join(OUTPUT_DIR, "final_audio.wav")
 FINAL_VIDEO = os.path.join(OUTPUT_DIR, "final_video.mp4")

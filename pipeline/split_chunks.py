@@ -1,6 +1,6 @@
 import json
 import os
-from config import TRANSLATION_DIR, CHUNKS_DIR
+from pipeline.constants import TRANSLATION_DIR, CHUNKS_DIR
 from helpers.validators import assert_valid_chunks
 
 MAX_CHARS = 260          # безопасный лимит для TTS

@@ -1,30 +1,76 @@
 import argparse
 import os
 import sys
-import subprocess
 import shutil
+import subprocess
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR = os.path.join(ROOT, "6_output")
+# ПОДКЛЮЧАЕМ ЕДИНУЮ СИСТЕМУ ПУТЕЙ
+from pipeline.constants import (
+    INPUT_DIR,
+    AUDIO_DIR,
+    WHISPER_DIR,
+    TRANSLATION_DIR,
+    CHUNKS_DIR,
+    OUTPUT_DIR,
+)
 
-
-def clean_output():
-    """Удаляет ВСЕ файлы из 6_output, но не папку."""
-    print("🧹 Cleaning 6_output/...")
-
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
-
-    for f in os.listdir(OUTPUT_DIR):
-        path = os.path.join(OUTPUT_DIR, f)
-        try:
-            os.remove(path)
-        except IsADirectoryError:
-            shutil.rmtree(path)
-
-    print("✔ 6_output cleaned!")
+HOME = os.path.expanduser("~")
+DOWNLOADS_DIR = os.path.join(HOME, "Загрузки")
+DEFAULT_DOWNLOAD_FILE = os.path.join(DOWNLOADS_DIR, "input.mp4")
 
 
+# -------------------------------------------------------
+# FULL CLEAN — очищаем ВСЕ данные старого запуска
+# -------------------------------------------------------
+def clean_all():
+    folders = [
+        INPUT_DIR,
+        AUDIO_DIR,
+        WHISPER_DIR,
+        TRANSLATION_DIR,
+        CHUNKS_DIR,
+        OUTPUT_DIR,
+    ]
+
+    print("🧹 Cleaning ALL pipeline folders...")
+    for folder in folders:
+        if not os.path.exists(folder):
+            continue
+
+        for f in os.listdir(folder):
+            full_path = os.path.join(folder, f)
+            try:
+                if os.path.isfile(full_path):
+                    os.remove(full_path)
+                else:
+                    shutil.rmtree(full_path)
+            except Exception as e:
+                print(f"⚠️ Could not clean {full_path}: {e}")
+
+    print("✔ All folders cleaned!")
+
+
+# -------------------------------------------------------
+# Копируем исходное видео → input.mp4
+# -------------------------------------------------------
+def copy_input_video(src_path: str):
+    if not os.path.exists(src_path):
+        print(f"❌ Video not found: {src_path}")
+        sys.exit(1)
+
+    dst = os.path.join(INPUT_DIR, "input.mp4")
+
+    try:
+        shutil.copyfile(src_path, dst)
+        print(f"📥 Copied input video → {dst}")
+    except Exception as e:
+        print(f"❌ Failed to copy video: {e}")
+        sys.exit(1)
+
+
+# -------------------------------------------------------
+# ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ
+# -------------------------------------------------------
 def run(cmd):
     print(f"\n🚀 Running: {cmd}")
     result = subprocess.run(cmd, shell=True)
@@ -33,63 +79,44 @@ def run(cmd):
         sys.exit(1)
 
 
+# -------------------------------------------------------
+# ОБЩИЕ ПРЕПРОЦЕССИНГ-ШАГИ
+# -------------------------------------------------------
 def run_common_steps(input_video: str, lang: str):
     print("\n🧱 Running shared preprocessing steps")
 
-    # 0. Clean output
-    clean_output()
+    clean_all()
+    copy_input_video(input_video)
 
-    # 1. Extract original audio
-    run(f"python -m pipeline.extract_audio {input_video}")
-
-    # 2. Whisper transcript
+    run("python -m pipeline.extract_audio 1_input/input.mp4")
     run("python -m pipeline.whisper_transcribe")
-
-    # 3. Translate transcript
     run(f"python -m pipeline.translate_chunks {lang}")
 
 
+# -------------------------------------------------------
+# DUBBING
+# -------------------------------------------------------
 def run_dubbing_pipeline(input_video: str, lang: str):
     print("\n🎬 Starting FULL DUBBING PIPELINE")
-    print(f"🎥 Input video: {input_video}")
-    print(f"🌐 Target language: {lang}")
-    print("🎚 Mode: dubbing")
-
     run_common_steps(input_video, lang)
 
-    # 4. Split translated text into chunks
     run("python -m pipeline.split_chunks")
-
-    # 5. Generate TTS for each chunk
     run("python -m pipeline.generate_tts")
-
-    # 6. Stretch TTS to match timing
     run("python -m pipeline.stretch_audio")
-
-    # ❌ REMOVE_VOICE отключено — мы сохраняем звуки
-    # run("python -m pipeline.remove_voice")
-
-    # 7. Merge stretched TTS + pauses
     run("python -m pipeline.merge_audio")
-
-    # 8. Mix original SFX + translated voice
     run("python -m pipeline.merge_video")
 
     print("\n🎉 ALL DONE!")
     print("🍿 Final video → 6_output/final_video.mp4")
 
 
+# -------------------------------------------------------
+# VOICE-OVER
+# -------------------------------------------------------
 def run_voice_over_pipeline(input_video: str, lang: str):
     print("\n🎬 Starting VOICE-OVER PIPELINE")
-    print(f"🎥 Input video: {input_video}")
-    print(f"🌐 Target language: {lang}")
-    print("🎚 Mode: voice_over")
-
     run_common_steps(input_video, lang)
 
-    print("\n🎙 Switching to voice-over specific steps")
-
-    # Voice-over flow: synthesize, mix with original bed, and mux with video
     run("python -m pipeline.voice_over_tts")
     run("python -m pipeline.voice_over_mix")
     run("python -m pipeline.merge_video --mode voice_over")
@@ -98,20 +125,15 @@ def run_voice_over_pipeline(input_video: str, lang: str):
     print("📼 Final voice-over video → 6_output/final_video.mp4")
 
 
+# -------------------------------------------------------
+# MAIN
+# -------------------------------------------------------
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Dub or voice-over any video using the automated pipeline"
-    )
-    parser.add_argument("input_video", help="Path to the input video file")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input_video", help="Path to video file")
+    parser.add_argument("lang", help="Language code")
     parser.add_argument(
-        "lang",
-        help="Target language code (e.g., ru, en, es)",
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["dubbing", "voice_over"],
-        default="dubbing",
-        help="Processing mode: dubbing (default) or voice_over",
+        "--mode", choices=["dubbing", "voice_over"], default="voice_over"
     )
     return parser.parse_args()
 
@@ -121,12 +143,8 @@ def main():
 
     if args.mode == "dubbing":
         run_dubbing_pipeline(args.input_video, args.lang)
-    elif args.mode == "voice_over":
-        run_voice_over_pipeline(args.input_video, args.lang)
     else:
-        # argparse choices prevent this, but keep a safeguard for clarity
-        print(f"❌ Unsupported mode: {args.mode}")
-        sys.exit(1)
+        run_voice_over_pipeline(args.input_video, args.lang)
 
 
 if __name__ == "__main__":

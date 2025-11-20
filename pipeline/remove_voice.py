@@ -1,6 +1,6 @@
 import os
 import subprocess
-from config import AUDIO_DIR, OUTPUT_DIR
+from pipeline.constants import AUDIO_DIR, OUTPUT_DIR
 
 INPUT_AUDIO = os.path.join(AUDIO_DIR, "input.wav")
 SFX_AUDIO = os.path.join(OUTPUT_DIR, "background_sfx.wav")

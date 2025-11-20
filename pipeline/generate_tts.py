@@ -2,7 +2,8 @@ import os
 import json
 import subprocess
 from openai import OpenAI
-from config import CHUNKS_DIR, OUTPUT_DIR, OPENAI_API_KEY
+from config import OPENAI_API_KEY
+from pipeline.constants import CHUNKS_DIR, OUTPUT_DIR
 from helpers.validators import assert_valid_tts_chunk
 
 client = OpenAI(api_key=OPENAI_API_KEY)
