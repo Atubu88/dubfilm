@@ -8,7 +8,7 @@ import tempfile
 import wave
 from dataclasses import dataclass
 from typing import List
-
+from pipeline.detect_speech_start import detect_speech_start
 from openai import OpenAI
 from pydub import AudioSegment, effects
 
@@ -25,10 +25,10 @@ FINAL_AUDIO = os.path.join(OUTPUT_DIR, "final_audio.wav")
 VOICE_CACHE_DIR = os.path.join(OUTPUT_DIR, "voice_over_segments")
 
 TARGET_SAMPLE_RATE = 16000
-TOLERANCE_MS = 10
 SILENCE_TAIL_MS = 500
 
-MIN_STRETCH_RATIO = 0.9  # below this, do not stretch — just pad with silence
+MAX_COMPRESSION = 1.10  # максимум 10% сжатия — незаметно
+MAX_EXPANSION = 1.10    # максимум 10% растяжения — также незаметно
 
 
 @dataclass
@@ -95,14 +95,13 @@ def synthesize_text_to_audio(text: str) -> AudioSegment:
         model="gpt-4o-mini-tts",
         voice="echo",
         input=text,
-        response_format="wav",  # keep full fidelity before post-processing
+        response_format="wav",
     )
 
     audio_bytes = response.read()
     buffer = io.BytesIO(audio_bytes)
     audio = AudioSegment.from_file(buffer, format="wav")
 
-    # Subtle mastering to warm up and humanize the voice without changing timing.
     audio = audio.set_channels(1).set_frame_rate(TARGET_SAMPLE_RATE)
     audio = audio.fade_in(5).fade_out(15)
     audio = effects.normalize(audio, headroom=1.5)
@@ -113,7 +112,6 @@ def synthesize_text_to_audio(text: str) -> AudioSegment:
         attack=8,
         release=120,
     )
-    # Gentle EQ: clean sub-rumble and soften harsh highs for a warmer, more cinematic tone.
     audio = audio.high_pass_filter(80).low_pass_filter(12000)
     return audio
 
@@ -131,12 +129,14 @@ def build_atempo_chain(ratio: float) -> str:
         else:
             filters.append("atempo=2.0")
             temp_ratio /= 2.0
+
     filters.append(f"atempo={temp_ratio:.4f}")
     return ",".join(filters)
 
 
 def stretch_with_ffmpeg(audio: AudioSegment, ratio: float) -> AudioSegment:
     os.makedirs(VOICE_CACHE_DIR, exist_ok=True)
+
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_in:
         audio.export(tmp_in.name, format="wav")
         input_path = tmp_in.name
@@ -158,8 +158,10 @@ def stretch_with_ffmpeg(audio: AudioSegment, ratio: float) -> AudioSegment:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode != 0:
             raise VoiceOverError("❌ Failed to stretch audio via ffmpeg")
+
         stretched = AudioSegment.from_file(output_path, format="wav")
         stretched = stretched.set_channels(1).set_frame_rate(TARGET_SAMPLE_RATE)
+
     finally:
         for path in (input_path, output_path):
             try:
@@ -169,37 +171,69 @@ def stretch_with_ffmpeg(audio: AudioSegment, ratio: float) -> AudioSegment:
 
     return stretched
 
-def match_duration(audio: AudioSegment, target_ms: int) -> AudioSegment:
+
+# ⭐⭐⭐ НАША ГЛАВНАЯ ФУНКЦИЯ — ГАРАНТИЯ ОТСУТСТВИЯ ПЕРЕКРЫТИЙ ⭐⭐⭐
+
+def fit_tts_into_segment(audio: AudioSegment, target_ms: int) -> AudioSegment:
     current_ms = len(audio)
 
-    # Если TTS короче окна → добавляем тишину
+    # Если TTS короче — добиваем тишиной
     if current_ms < target_ms:
         return audio + AudioSegment.silent(duration=target_ms - current_ms)
 
-    # Если TTS длиннее → оставляем как есть (НИКОГДА не обрезаем)
-    return audio
+    ratio = current_ms / target_ms  # >1 = длиннее сегмента
 
+    # Если намного длиннее, более чем на 10% → не сжимаем (испортит звук)
+    if ratio > MAX_COMPRESSION:
+        print(f"⚠️ WARNING: TTS too long for segment (+{ratio:.2f}x). Hard trimming applied.")
+        return audio[:target_ms]
+
+    # Если чуть длиннее сегмента (1–10%) → мягкое сжатие (НЕ слышно)
+    if ratio > 1.01:
+        tempo = 1 / ratio
+        stretched = stretch_with_ffmpeg(audio, tempo)
+        stretched_ms = len(stretched)
+
+        if stretched_ms < target_ms:
+            stretched += AudioSegment.silent(duration=target_ms - stretched_ms)
+
+        return stretched
+
+    # Почти идеально → просто подрезаем хвост
+    return audio[:target_ms]
+
+
+# -----------------------------------------
 
 def place_segments_on_timeline(segments: List[Segment], total_duration: float) -> AudioSegment:
     timeline_duration_ms = int(math.ceil(total_duration * 1000)) + SILENCE_TAIL_MS
     print(f"🧱 Building voice-over timeline of {timeline_duration_ms / 1000:.2f}s")
-    final_audio = AudioSegment.silent(duration=timeline_duration_ms, frame_rate=TARGET_SAMPLE_RATE)
+
+    final_audio = AudioSegment.silent(
+        duration=timeline_duration_ms,
+        frame_rate=TARGET_SAMPLE_RATE
+    )
 
     for seg in segments:
-        target_ms = seg.duration_ms
-        if target_ms <= 0:
+        if seg.duration_ms <= 0:
             continue
 
-        synthesized = synthesize_text_to_audio(seg.text)
-        stretched = match_duration(synthesized, target_ms)
+        # Генерируем TTS как есть — НИ ТРИММИНГА, НИ СЖАТИЯ, НИ УСКОРЕНИЯ
+        tts_audio = synthesize_text_to_audio(seg.text)
 
-        position_ms = int(seg.start * 1000)
+        start_ms = int(seg.start * 1000)
+
         print(
-            f"  • Segment {seg.id}: start={seg.start:.2f}s end={seg.end:.2f}s duration={target_ms / 1000:.2f}s"
+            f"  • Segment {seg.id}: start={seg.start:.2f}s, "
+            f"tts_len={len(tts_audio)/1000:.2f}s, "
+            f"window={seg.duration_ms/1000:.2f}s"
         )
-        final_audio = final_audio.overlay(stretched, position=position_ms)
+
+        # Главное — просто накладываем TTS в своей Whisper-позиции
+        final_audio = final_audio.overlay(tts_audio, position=start_ms)
 
     return final_audio
+
 
 
 def sanity_check_wav(path: str, min_duration: float) -> None:
@@ -227,20 +261,47 @@ def export_audio_track(audio: AudioSegment) -> None:
     audio.export(WAV_OUTPUT, format="wav")
     audio.export(MP3_OUTPUT, format="mp3")
     shutil.copyfile(WAV_OUTPUT, FINAL_AUDIO)
+
     print(f"💾 Saved WAV → {WAV_OUTPUT}")
     print(f"💾 Saved MP3 → {MP3_OUTPUT}")
     print(f"📦 Copied voice-over track to FINAL_AUDIO → {FINAL_AUDIO}")
 
 
+
+
+
 def generate_voice_over_track():
     segments = load_translated_segments()
     total_duration = load_original_duration(segments)
+
     if total_duration <= 0:
         raise VoiceOverError("❌ Unable to determine original duration")
 
-    final_audio = place_segments_on_timeline(segments, total_duration)
+    # --- 🟦 1. Определяем реальное начало речи через VAD ---
+    wav_path = os.path.join("2_audio", "input.wav")
+    real_start = detect_speech_start(wav_path)
+    whisper_start = segments[0].start
+
+    offset = real_start - whisper_start
+
+    print(f"🟦 Real speech starts at: {real_start:.2f}s")
+    print(f"🟦 Whisper thinks start: {whisper_start:.2f}s")
+    print(f"🟦 Applying global offset: {offset:.2f}s")
+
+    # --- 🟦 2. Сдвигаем ВСЕ сегменты Whisper ---
+    for seg in segments:
+        seg.start += offset
+        seg.end += offset
+
+    # --- 🟦 3. Генерируем TTS в обновлённых местах ---
+    final_audio = place_segments_on_timeline(
+        segments,
+        total_duration + offset
+    )
+
     export_audio_track(final_audio)
     sanity_check_wav(WAV_OUTPUT, min_duration=max(0.5, total_duration - 0.5))
+
     print("🟢 Voice-over track ready!")
 
 
