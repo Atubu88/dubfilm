@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-from config import AUDIO_DIR, OUTPUT_DIR
+from pipeline.constants import AUDIO_DIR, OUTPUT_DIR
 
 ORIGINAL_AUDIO = os.path.join(AUDIO_DIR, "input.wav")
 TTS_AUDIO = os.path.join(OUTPUT_DIR, "voice_over_tts.wav")

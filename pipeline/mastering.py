@@ -1,6 +1,6 @@
 import os
 from pydub import AudioSegment
-from config import OUTPUT_DIR
+from pipeline.constants import OUTPUT_DIR
 from helpers.validators import assert_valid_final_audio
 
 FINAL_RAW = os.path.join(OUTPUT_DIR, "final_audio.wav")

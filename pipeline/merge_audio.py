@@ -2,7 +2,7 @@ import os
 import wave
 import json
 import subprocess
-from config import CHUNKS_DIR, OUTPUT_DIR, AUDIO_DIR
+from pipeline.constants import CHUNKS_DIR, OUTPUT_DIR, AUDIO_DIR
 
 FINAL_AUDIO = os.path.join(OUTPUT_DIR, "final_audio.wav")
 

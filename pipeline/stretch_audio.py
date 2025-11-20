@@ -2,7 +2,7 @@ import os
 import json
 import subprocess
 import wave
-from config import OUTPUT_DIR, CHUNKS_DIR
+from pipeline.constants import OUTPUT_DIR, CHUNKS_DIR
 
 
 def get_wav_duration(path):
