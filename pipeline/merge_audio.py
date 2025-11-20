@@ -28,7 +28,11 @@ def merge_audio():
     print("🎚 Starting MERGE_AUDIO with real pauses…")
 
     fixed_wavs = sorted(
-        [f for f in os.listdir(OUTPUT_DIR) if f.startswith("tts_") and f.endswith(".wav")]
+        [
+            f
+            for f in os.listdir(OUTPUT_DIR)
+            if f.startswith("tts_fixed_") and f.endswith(".wav")
+        ]
     )
 
     if not fixed_wavs:
@@ -45,7 +49,9 @@ def merge_audio():
     with open(concat_list_path, "w", encoding="utf-8") as listfile:
         for i, chunk_json in enumerate(chunks):
             idx = chunk_json.replace("chunk_", "").replace(".json", "")
-            wav_path = os.path.abspath(os.path.join(OUTPUT_DIR, f"tts_{idx}.wav"))
+            wav_path = os.path.abspath(
+                os.path.join(OUTPUT_DIR, f"tts_fixed_{idx}.wav")
+            )
 
             listfile.write(f"file '{wav_path}'\n")
 
