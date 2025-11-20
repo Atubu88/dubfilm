@@ -19,9 +19,11 @@ def mix_voice_over_tracks():
 
     print("🎚️ Mixing voice-over with original audio bed…")
 
+    # Сильно приглушаем оригинальный голос, оставляя только фон, чтобы не было эффекта
+    # «двойного» произношения, и ограничиваем полосу для ещё большей прозрачности.
     filter_complex = (
-        "[0:a]volume=-20dB[a0];"
-        "[a0][1:a]amix=inputs=2:duration=longest:dropout_transition=0[aout]"
+        "[0:a]highpass=f=120,lowpass=f=3000,volume=-35dB[a0];"
+        "[a0][1:a]amix=inputs=2:duration=shortest:dropout_transition=0[aout]"
     )
 
     cmd = [
