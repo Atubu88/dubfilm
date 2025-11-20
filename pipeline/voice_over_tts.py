@@ -1,5 +1,3 @@
-# pipeline/voice_over_tts.py
-
 import io
 import json
 import math
@@ -30,8 +28,7 @@ TARGET_SAMPLE_RATE = 16000
 TOLERANCE_MS = 10
 SILENCE_TAIL_MS = 500
 
-# сейчас не используем, но оставляем на будущее
-MIN_STRETCH_RATIO = 0.9
+MIN_STRETCH_RATIO = 0.9  # below this, do not stretch — just pad with silence
 
 
 @dataclass
@@ -50,9 +47,6 @@ class VoiceOverError(RuntimeError):
     pass
 
 
-# -------------------------------------------------------------------
-# Загрузка сегментов
-# -------------------------------------------------------------------
 def load_translated_segments() -> List[Segment]:
     if not os.path.exists(TRANSLATED_JSON):
         raise VoiceOverError("❌ translated.json not found — cannot build voice-over track")
@@ -95,78 +89,35 @@ def load_original_duration(segments: List[Segment]) -> float:
     return max((seg.end for seg in segments), default=0.0)
 
 
-# -------------------------------------------------------------------
-# Лёгкая «оживляющая» обработка
-# -------------------------------------------------------------------
-def apply_loudness_drift(audio: AudioSegment, depth_db: float = 1.0) -> AudioSegment:
-    import random
-
-    drifted = AudioSegment.empty()
-    chunk_ms = 120  # маленькие шаги для естественных колебаний
-
-    for i in range(0, len(audio), chunk_ms):
-        chunk = audio[i:i + chunk_ms]
-        shift = random.uniform(-depth_db, depth_db)
-        drifted += chunk + shift
-
-    return drifted
-
-
-def add_presence(audio: AudioSegment) -> AudioSegment:
-    # чуть поднимаем «середину», но мягко
-    return audio + audio.high_pass_filter(180) - 2
-
-
-def apply_random_eq(audio: AudioSegment) -> AudioSegment:
-    import random
-
-    low = random.uniform(70, 110)
-    high = random.uniform(11500, 13500)
-    return audio.high_pass_filter(low).low_pass_filter(high)
-
-
-# -------------------------------------------------------------------
-# Синтез TTS + лёгкий mastering
-# -------------------------------------------------------------------
 def synthesize_text_to_audio(text: str) -> AudioSegment:
     print(f"🔊 Synthesizing TTS for: {text[:60]}{'…' if len(text) > 60 else ''}")
     response = client.audio.speech.create(
         model="gpt-4o-mini-tts",
-        voice="echo",          # мужской голос, как ты поставил
+        voice="echo",
         input=text,
-        response_format="wav",
+        response_format="wav",  # keep full fidelity before post-processing
     )
 
     audio_bytes = response.read()
     buffer = io.BytesIO(audio_bytes)
     audio = AudioSegment.from_file(buffer, format="wav")
 
-    # базовая обработка
+    # Subtle mastering to warm up and humanize the voice without changing timing.
     audio = audio.set_channels(1).set_frame_rate(TARGET_SAMPLE_RATE)
     audio = audio.fade_in(5).fade_out(15)
-
-    audio = effects.normalize(audio, headroom=1.2)
+    audio = effects.normalize(audio, headroom=1.5)
     audio = effects.compress_dynamic_range(
         audio,
-        threshold=-27.0,
-        ratio=2.2,
-        attack=6,
-        release=140,
+        threshold=-26.0,
+        ratio=2.3,
+        attack=8,
+        release=120,
     )
-
-    # добавляем «живость»
-    audio = apply_loudness_drift(audio, depth_db=0.8)
-    audio = add_presence(audio)
-
-    # лёгкая вариативность EQ
-    audio = apply_random_eq(audio)
-
+    # Gentle EQ: clean sub-rumble and soften harsh highs for a warmer, more cinematic tone.
+    audio = audio.high_pass_filter(80).low_pass_filter(12000)
     return audio
 
 
-# -------------------------------------------------------------------
-# (оставляем на будущее, сейчас не используем)
-# -------------------------------------------------------------------
 def build_atempo_chain(ratio: float) -> str:
     if ratio <= 0:
         raise VoiceOverError("❌ Invalid tempo ratio computed")
@@ -218,71 +169,39 @@ def stretch_with_ffmpeg(audio: AudioSegment, ratio: float) -> AudioSegment:
 
     return stretched
 
-
-# -------------------------------------------------------------------
-# Матчинг по длине: только паддинг, без обрезки
-# -------------------------------------------------------------------
 def match_duration(audio: AudioSegment, target_ms: int) -> AudioSegment:
     current_ms = len(audio)
-
-    # Небольшие расхождения игнорируем, чтобы не резать дыхание
-    if abs(current_ms - target_ms) <= TOLERANCE_MS:
-        return audio
 
     # Если TTS короче окна → добавляем тишину
     if current_ms < target_ms:
         return audio + AudioSegment.silent(duration=target_ms - current_ms)
 
-    # Если TTS длиннее → мягко режем по целевому окну, чтобы не раздвигать таймлайн
-    trimmed = audio[:target_ms]
-    fade_out_ms = min(40, max(8, int(target_ms * 0.05)))
-    return trimmed.fade_out(fade_out_ms)
+    # Если TTS длиннее → оставляем как есть (НИКОГДА не обрезаем)
+    return audio
 
 
-# -------------------------------------------------------------------
-# Построение таймлайна БЕЗ ПЕРЕКРЫТИЙ
-# -------------------------------------------------------------------
 def place_segments_on_timeline(segments: List[Segment], total_duration: float) -> AudioSegment:
-    sorted_segments = sorted(segments, key=lambda s: s.start)
-    placements = []
-    current_position_ms = 0
+    timeline_duration_ms = int(math.ceil(total_duration * 1000)) + SILENCE_TAIL_MS
+    print(f"🧱 Building voice-over timeline of {timeline_duration_ms / 1000:.2f}s")
+    final_audio = AudioSegment.silent(duration=timeline_duration_ms, frame_rate=TARGET_SAMPLE_RATE)
 
-    for seg in sorted_segments:
+    for seg in segments:
         target_ms = seg.duration_ms
         if target_ms <= 0:
             continue
 
         synthesized = synthesize_text_to_audio(seg.text)
-        tts_audio = match_duration(synthesized, target_ms)
+        stretched = match_duration(synthesized, target_ms)
 
-        requested_start_ms = int(seg.start * 1000)
-
-        # КЛЮЧЕВОЕ: сегмент НИКОГДА не начинается раньше окончания предыдущего
-        position_ms = max(requested_start_ms, current_position_ms)
-        end_ms = position_ms + len(tts_audio)
-
-        placements.append((seg, tts_audio, position_ms))
-        current_position_ms = end_ms
-
+        position_ms = int(seg.start * 1000)
         print(
-            f"  • Segment {seg.id}: start={seg.start:.2f}s end={seg.end:.2f}s "
-            f"tts={len(tts_audio) / 1000:.2f}s placed_at={position_ms / 1000:.2f}s"
+            f"  • Segment {seg.id}: start={seg.start:.2f}s end={seg.end:.2f}s duration={target_ms / 1000:.2f}s"
         )
-
-    timeline_duration_ms = max(int(math.ceil(total_duration * 1000)), current_position_ms) + SILENCE_TAIL_MS
-    print(f"🧱 Building voice-over timeline of {timeline_duration_ms / 1000:.2f}s")
-
-    final_audio = AudioSegment.silent(duration=timeline_duration_ms, frame_rate=TARGET_SAMPLE_RATE)
-
-    for seg, tts_audio, position_ms in placements:
-        final_audio = final_audio.overlay(tts_audio, position=position_ms)
+        final_audio = final_audio.overlay(stretched, position=position_ms)
 
     return final_audio
 
 
-# -------------------------------------------------------------------
-# Проверка и экспорт
-# -------------------------------------------------------------------
 def sanity_check_wav(path: str, min_duration: float) -> None:
     if not os.path.exists(path):
         raise VoiceOverError(f"❌ WAV not found → {path}")
@@ -313,9 +232,6 @@ def export_audio_track(audio: AudioSegment) -> None:
     print(f"📦 Copied voice-over track to FINAL_AUDIO → {FINAL_AUDIO}")
 
 
-# -------------------------------------------------------------------
-# MAIN
-# -------------------------------------------------------------------
 def generate_voice_over_track():
     segments = load_translated_segments()
     total_duration = load_original_duration(segments)
