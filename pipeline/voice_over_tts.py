@@ -28,6 +28,10 @@ VOICE_CACHE_DIR = os.path.join(OUTPUT_DIR, "voice_over_segments")
 TARGET_SAMPLE_RATE = 16000
 SILENCE_TAIL_MS = 500
 
+ONSET_OFFSET_IGNORE_THRESHOLD = float(
+    os.getenv("ONSET_OFFSET_IGNORE_THRESHOLD", "0.10")
+)
+
 MAX_COMPRESSION = 1.10  # максимум 10% сжатия — незаметно
 MAX_EXPANSION = 1.10    # максимум 10% растяжения — также незаметно
 
@@ -206,12 +210,17 @@ def fit_tts_into_segment(audio: AudioSegment, target_ms: int) -> AudioSegment:
 
 # -----------------------------------------
 
-def place_segments_on_timeline(segments: List[Segment], total_duration: float) -> AudioSegment:
+def place_segments_on_timeline(
+    segments: List[Segment],
+    total_duration: float,
+    leading_silence_ms: int = 0,
+) -> AudioSegment:
     timeline_duration_ms = int(math.ceil(total_duration * 1000)) + SILENCE_TAIL_MS
     print(f"🧱 Building voice-over timeline of {timeline_duration_ms / 1000:.2f}s")
 
+    core_timeline_ms = max(timeline_duration_ms - leading_silence_ms, 0)
     final_audio = AudioSegment.silent(
-        duration=timeline_duration_ms,
+        duration=core_timeline_ms,
         frame_rate=TARGET_SAMPLE_RATE
     )
 
@@ -222,7 +231,7 @@ def place_segments_on_timeline(segments: List[Segment], total_duration: float) -
         # Генерируем TTS как есть — НИ ТРИММИНГА, НИ СЖАТИЯ, НИ УСКОРЕНИЯ
         tts_audio = synthesize_text_to_audio(seg.text)
 
-        start_ms = int(seg.start * 1000)
+        start_ms = int(seg.start * 1000) - leading_silence_ms
 
         print(
             f"  • Segment {seg.id}: start={seg.start:.2f}s, "
@@ -231,7 +240,11 @@ def place_segments_on_timeline(segments: List[Segment], total_duration: float) -
         )
 
         # Главное — просто накладываем TTS в своей Whisper-позиции
-        final_audio = final_audio.overlay(tts_audio, position=start_ms)
+        final_audio = final_audio.overlay(tts_audio, position=max(start_ms, 0))
+
+    if leading_silence_ms > 0:
+        prefix = AudioSegment.silent(duration=leading_silence_ms, frame_rate=TARGET_SAMPLE_RATE)
+        final_audio = prefix + final_audio
 
     return final_audio
 
@@ -294,12 +307,17 @@ def generate_voice_over_track():
     offset = real_start - whisper_start
 
     # IMPORTANT:
-    # ignore tiny offsets caused by noise (<0.25 sec)
-    if abs(offset) < 0.25:
-        print(f"🟦 Offset too small ({offset:.2f}s) → ignoring")
+    # ignore tiny offsets caused by noise (<ONSET_OFFSET_IGNORE_THRESHOLD sec)
+    if abs(offset) < ONSET_OFFSET_IGNORE_THRESHOLD:
+        print(
+            f"🟦 Offset {offset:.2f}s below threshold "
+            f"({ONSET_OFFSET_IGNORE_THRESHOLD:.2f}s) → ignoring"
+        )
         offset = 0.0
     else:
         print(f"🟩 Applying global offset: {offset:.2f}s")
+
+    applied_offset = offset
 
     # ------------------------------------
     # 3. APPLY OFFSET TO ALL SEGMENTS
@@ -318,12 +336,22 @@ def generate_voice_over_track():
     max_segment_end = max(seg.end for seg in segments)
     timeline_duration = max(total_duration, max_segment_end)
 
+    leading_silence_ms = int(max(applied_offset, 0) * 1000)
+
+    if applied_offset != 0:
+        print(
+            f"🧭 Applied onset offset: {applied_offset:.3f}s → "
+            f"leading_silence={leading_silence_ms/1000:.3f}s"
+        )
+
     print(f"🧱 Building voice-over timeline of {timeline_duration:.2f}s")
 
     # ------------------------------------
     # 5. GENERATE FINAL TTS AUDIO
     # ------------------------------------
-    final_audio = place_segments_on_timeline(segments, timeline_duration)
+    final_audio = place_segments_on_timeline(
+        segments, timeline_duration, leading_silence_ms=leading_silence_ms
+    )
 
     export_audio_track(final_audio)
     sanity_check_wav(WAV_OUTPUT, min_duration=max(0.5, timeline_duration - 0.5))
