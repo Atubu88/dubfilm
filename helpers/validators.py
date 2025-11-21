@@ -66,12 +66,13 @@ def assert_valid_whisper(json_path: str, expected_language=None):
 class TranslationValidationError(Exception):
     pass
 
-def assert_valid_translation(json_path: str, min_ratio=0.5):
+
+def assert_valid_translation(json_path: str, min_ratio=0.5, max_ratio: float | None = 3.0):
     """
     Проверяет:
     - совпадение количества сегментов
     - наличие dst
-    - длина перевода не слишком короткая
+    - длина перевода не слишком короткая или длинная (для контроля галлюцинаций)
     """
 
     with open(json_path, "r", encoding="utf-8") as f:
@@ -103,6 +104,11 @@ def assert_valid_translation(json_path: str, min_ratio=0.5):
             if ratio < min_ratio:
                 raise TranslationValidationError(
                     f"❌ Segment #{i} TOO SHORT → ratio={ratio:.2f}"
+                )
+
+            if max_ratio and ratio > max_ratio:
+                raise TranslationValidationError(
+                    f"❌ Segment #{i} TOO LONG → ratio={ratio:.2f}"
                 )
 
     print(f"✅ Translation VALID → {len(data)} segments OK")
