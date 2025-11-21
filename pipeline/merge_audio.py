@@ -48,16 +48,24 @@ def merge_audio():
 
     with open(concat_list_path, "w", encoding="utf-8") as listfile:
         for i, chunk_json in enumerate(chunks):
+            chunk_path = os.path.join(CHUNKS_DIR, chunk_json)
+            with open(chunk_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if i == 0 and data["start"] > 0:
+                leading_silence = data["start"]
+                silence_path = os.path.abspath(
+                    os.path.join(OUTPUT_DIR, "silence_leading.wav")
+                )
+                create_silence(silence_path, leading_silence)
+                listfile.write(f"file '{silence_path}'\n")
+
             idx = chunk_json.replace("chunk_", "").replace(".json", "")
             wav_path = os.path.abspath(
                 os.path.join(OUTPUT_DIR, f"tts_fixed_{idx}.wav")
             )
 
             listfile.write(f"file '{wav_path}'\n")
-
-            # calculate pauses
-            with open(os.path.join(CHUNKS_DIR, chunk_json), "r", encoding="utf-8") as f:
-                data = json.load(f)
 
             if i < len(chunks) - 1:
                 next_chunk_path = os.path.join(CHUNKS_DIR, chunks[i + 1])
