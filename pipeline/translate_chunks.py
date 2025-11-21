@@ -25,6 +25,7 @@ def translate_segments(
         whisper_data = json.load(f)
 
     segments = whisper_data["segments"]
+    leading_silence = float(whisper_data.get("leading_silence", 0.0) or 0.0)
 
     print(f"📖 Loaded {len(segments)} segments for translation")
 
@@ -128,8 +129,13 @@ def translate_segments(
     json_out = os.path.join(TRANSLATION_DIR, "translated.json")
     txt_out = os.path.join(TRANSLATION_DIR, "translated.txt")
 
+    payload = {
+        "leading_silence": leading_silence,
+        "segments": translated_segments,
+    }
+
     with open(json_out, "w", encoding="utf-8") as f:
-        json.dump(translated_segments, f, ensure_ascii=False, indent=2)
+        json.dump(payload, f, ensure_ascii=False, indent=2)
 
     with open(txt_out, "w", encoding="utf-8") as f:
         f.write("\n".join(t["dst"] for t in translated_segments))

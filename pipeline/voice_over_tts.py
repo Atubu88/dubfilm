@@ -14,7 +14,6 @@ from pydub import AudioSegment, effects
 
 from config import OPENAI_API_KEY
 from pipeline.constants import OUTPUT_DIR, TRANSLATION_DIR, WHISPER_DIR
-from pipeline.speech_onset import detect_speech_onset
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -52,12 +51,17 @@ class VoiceOverError(RuntimeError):
     pass
 
 
-def load_translated_segments() -> List[Segment]:
+def load_translated_segments() -> tuple[List[Segment], float]:
     if not os.path.exists(TRANSLATED_JSON):
         raise VoiceOverError("❌ translated.json not found — cannot build voice-over track")
 
     with open(TRANSLATED_JSON, "r", encoding="utf-8") as f:
         data = json.load(f)
+
+    leading_silence = 0.0
+    if isinstance(data, dict):
+        leading_silence = float(data.get("leading_silence", 0.0) or 0.0)
+        data = data.get("segments")
 
     if not isinstance(data, list):
         raise VoiceOverError("❌ translated.json has unexpected format (expected a list)")
@@ -79,8 +83,11 @@ def load_translated_segments() -> List[Segment]:
     if not segments:
         raise VoiceOverError("❌ No translated segments with text found")
 
-    print(f"📄 Loaded {len(segments)} translated segments for voice-over")
-    return segments
+    print(
+        f"📄 Loaded {len(segments)} translated segments for voice-over "
+        f"(leading silence {leading_silence:.2f}s)"
+    )
+    return segments, leading_silence
 
 
 def load_original_duration(segments: List[Segment]) -> float:
@@ -281,41 +288,26 @@ def export_audio_track(audio: AudioSegment) -> None:
     print(f"📦 Copied voice-over track to FINAL_AUDIO → {FINAL_AUDIO}")
 
 def generate_voice_over_track():
-    segments = load_translated_segments()
+    segments, leading_silence = load_translated_segments()
     total_duration = load_original_duration(segments)
 
     if total_duration <= 0:
         raise VoiceOverError("❌ Unable to determine original duration")
 
     # ------------------------------------
-    # 1. DETECT REAL SPEECH START VIA VAD
+    # 1. APPLY STORED LEADING SILENCE
     # ------------------------------------
-    wav_path = os.path.join("2_audio", "input.wav")
-    real_start = detect_speech_onset(wav_path)
+    min_start = min((seg.start for seg in segments), default=0.0)
+    offset = max(leading_silence - min_start, 0.0)
 
-    print(f"🟦 Real speech starts at: {real_start:.2f}s")
-
-    # whisper start (usually 0.0)
-    whisper_start = segments[0].start
-    print(f"🟦 Whisper thinks start: {whisper_start:.2f}s")
-
-    # ------------------------------------
-    # 2. COMPUTE CORRECTION OFFSET
-    # ------------------------------------
-    # If VAD says speech starts after 0 → shift segments forward
-    # If VAD says speech starts before Whisper → shift backward
-    offset = real_start - whisper_start
-
-    # IMPORTANT:
-    # ignore tiny offsets caused by noise (<ONSET_OFFSET_IGNORE_THRESHOLD sec)
-    if abs(offset) < ONSET_OFFSET_IGNORE_THRESHOLD:
-        print(
-            f"🟦 Offset {offset:.2f}s below threshold "
-            f"({ONSET_OFFSET_IGNORE_THRESHOLD:.2f}s) → ignoring"
-        )
+    if offset < ONSET_OFFSET_IGNORE_THRESHOLD:
         offset = 0.0
-    else:
-        print(f"🟩 Applying global offset: {offset:.2f}s")
+
+    if offset != 0:
+        print(
+            f"🟩 Applying preserved leading silence offset: {offset:+.3f}s "
+            f"(baseline {leading_silence:.3f}s)"
+        )
 
     applied_offset = offset
 
@@ -336,11 +328,11 @@ def generate_voice_over_track():
     max_segment_end = max(seg.end for seg in segments)
     timeline_duration = max(total_duration, max_segment_end)
 
-    leading_silence_ms = int(max(applied_offset, 0) * 1000)
+    leading_silence_ms = int(max(leading_silence, 0) * 1000)
 
     if applied_offset != 0:
         print(
-            f"🧭 Applied onset offset: {applied_offset:.3f}s → "
+            f"🧭 Applied preserved offset: {applied_offset:.3f}s → "
             f"leading_silence={leading_silence_ms/1000:.3f}s"
         )
 
