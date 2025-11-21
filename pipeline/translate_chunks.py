@@ -28,18 +28,18 @@ def translate_segments(
 
     print(f"📖 Loaded {len(segments)} segments for translation")
 
-    # ---------------------------
-    # 🔥 1. Разделяем сегменты
-    # ---------------------------
+    # -----------------------------------
+    # 1. Разделяем сегменты
+    # -----------------------------------
     empty_segments = [s for s in segments if not s["text"].strip()]
     non_empty_segments = [s for s in segments if s["text"].strip()]
 
     print(f"🌑 Empty segments: {len(empty_segments)}")
     print(f"🟩 To translate: {len(non_empty_segments)}")
 
-    # ---------------------------
-    # 🔥 2. GPT получает только непустые сегменты
-    # ---------------------------
+    # -----------------------------------
+    # 2. GPT получает только НЕпустые сегменты
+    # -----------------------------------
     payload = {
         "target_lang": target_lang,
         "segments": [
@@ -68,9 +68,9 @@ def translate_segments(
         ]
     )
 
-    # ---------------------------
-    # 🔥 3. Разбираем ответ
-    # ---------------------------
+    # -----------------------------------
+    # 3. Разбираем ответ GPT
+    # -----------------------------------
     try:
         translated_payload = json.loads(response.choices[0].message.content)
     except json.JSONDecodeError as exc:
@@ -86,17 +86,18 @@ def translate_segments(
             f"❌ GPT LOST SEGMENTS ({len(translated_non_empty)} vs {len(non_empty_segments)})"
         )
 
-    # Формируем словарь {id → перевод}
-    translated_dict = {t["id"]: t["dst"].strip() for t in translated_non_empty}
+    # словарь {id → dst}
+    translated_dict = {t["id"]: t["dst"] for t in translated_non_empty}
 
-    # ---------------------------
-    # 🔥 4. Восстанавливаем ВСЮ структуру
-    # ---------------------------
+    # -----------------------------------
+    # 4. Собираем финальный список сегментов
+    # -----------------------------------
     translated_segments = []
 
     for seg in segments:
 
-        if not seg["text"].strip():   # пустой сегмент
+        # пустой сегмент — перевод НЕ требуется
+        if not seg["text"].strip():
             translated_segments.append({
                 "id": seg["id"],
                 "start": seg["start"],
@@ -106,9 +107,9 @@ def translate_segments(
             })
             continue
 
-        # непустой сегмент — берём из словаря
-        dst = translated_dict.get(seg["id"], "").strip()
-        if not dst:
+        # непустой сегмент — перевод обязателен
+        dst = translated_dict.get(seg["id"])
+        if dst is None:
             raise RuntimeError(f"❌ Missing translation for id {seg['id']}")
 
         translated_segments.append({
@@ -116,12 +117,12 @@ def translate_segments(
             "start": seg["start"],
             "end": seg["end"],
             "src": seg["text"],
-            "dst": dst
+            "dst": dst.strip()
         })
 
-    # ---------------------------
-    # 🔥 5. Сохраняем
-    # ---------------------------
+    # -----------------------------------
+    # 5. Сохраняем файлы
+    # -----------------------------------
     os.makedirs(TRANSLATION_DIR, exist_ok=True)
 
     json_out = os.path.join(TRANSLATION_DIR, "translated.json")
@@ -135,10 +136,9 @@ def translate_segments(
 
     print(f"💾 SAVED → {json_out}")
 
-    # ---------------------------
-    # 🔥 6. Проверяем корректность
-    # ---------------------------
-    # Жёстко проверяем длину перевода, чтобы GPT не придумывал лишний текст
+    # -----------------------------------
+    # 6. Валидация
+    # -----------------------------------
     assert_valid_translation(json_out, max_ratio=3.0)
 
     print("🟢 Translation OK")

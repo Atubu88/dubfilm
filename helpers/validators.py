@@ -66,13 +66,13 @@ def assert_valid_whisper(json_path: str, expected_language=None):
 class TranslationValidationError(Exception):
     pass
 
-
 def assert_valid_translation(json_path: str, min_ratio=0.5, max_ratio: float | None = 3.0):
     """
     Проверяет:
-    - совпадение количества сегментов
-    - наличие dst
-    - длина перевода не слишком короткая или длинная (для контроля галлюцинаций)
+    - корректный формат JSON
+    - наличие всех обязательных полей
+    - корректность отношения длины dst/src (для непустых)
+    - допускает пустые переводы только если src пустой (шум)
     """
 
     with open(json_path, "r", encoding="utf-8") as f:
@@ -91,25 +91,32 @@ def assert_valid_translation(json_path: str, min_ratio=0.5, max_ratio: float | N
         src = seg.get("src", "").strip()
         dst = seg.get("dst", "").strip()
 
+        # -----------------------------
         # 🔥 Правильная логика:
-        # Если src пуст — dst МОЖЕТ быть пустым (это шум, удалённый GPT)
-        # Если src НЕ пуст — dst обязан быть НЕ пустым
-        if not dst and src:
-            raise TranslationValidationError(f"❌ Segment #{i} has EMPTY TRANSLATION")
+        # -----------------------------
+        # 1) Если src ПУСТ — dst МОЖЕТ быть пустым.
+        #    Это корректно → шум, который мы очищали VAD/GPT.
+        if not src:
+            continue
 
-        # если src пуст — ratio пропускаем
-        if src and dst:
-            ratio = len(dst) / max(1, len(src))
+        # 2) Если src НЕ пуст — dst обязан быть НЕ пустым.
+        if not dst:
+            raise TranslationValidationError(
+                f"❌ Segment #{i} has EMPTY TRANSLATION (src is non-empty)"
+            )
 
-            if ratio < min_ratio:
-                raise TranslationValidationError(
-                    f"❌ Segment #{i} TOO SHORT → ratio={ratio:.2f}"
-                )
+        # 3) Проверка ratio только если оба непустые
+        ratio = len(dst) / max(1, len(src))
 
-            if max_ratio and ratio > max_ratio:
-                raise TranslationValidationError(
-                    f"❌ Segment #{i} TOO LONG → ratio={ratio:.2f}"
-                )
+        if ratio < min_ratio:
+            raise TranslationValidationError(
+                f"❌ Segment #{i} TOO SHORT → ratio={ratio:.2f}"
+            )
+
+        if max_ratio and ratio > max_ratio:
+            raise TranslationValidationError(
+                f"❌ Segment #{i} TOO LONG → ratio={ratio:.2f}"
+            )
 
     print(f"✅ Translation VALID → {len(data)} segments OK")
     return True

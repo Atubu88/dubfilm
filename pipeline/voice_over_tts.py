@@ -267,7 +267,6 @@ def export_audio_track(audio: AudioSegment) -> None:
     print(f"💾 Saved MP3 → {MP3_OUTPUT}")
     print(f"📦 Copied voice-over track to FINAL_AUDIO → {FINAL_AUDIO}")
 
-
 def generate_voice_over_track():
     segments = load_translated_segments()
     total_duration = load_original_duration(segments)
@@ -275,35 +274,63 @@ def generate_voice_over_track():
     if total_duration <= 0:
         raise VoiceOverError("❌ Unable to determine original duration")
 
-    # --- Speech onset ---
+    # ------------------------------------
+    # 1. DETECT REAL SPEECH START VIA VAD
+    # ------------------------------------
     wav_path = os.path.join("2_audio", "input.wav")
     real_start = detect_speech_onset(wav_path)
 
+    print(f"🟦 Real speech starts at: {real_start:.2f}s")
+
+    # whisper start (usually 0.0)
     whisper_start = segments[0].start
+    print(f"🟦 Whisper thinks start: {whisper_start:.2f}s")
+
+    # ------------------------------------
+    # 2. COMPUTE CORRECTION OFFSET
+    # ------------------------------------
+    # If VAD says speech starts after 0 → shift segments forward
+    # If VAD says speech starts before Whisper → shift backward
     offset = real_start - whisper_start
 
-    print(f"🟦 Real speech starts at: {real_start:.2f}s")
-    print(f"🟦 Whisper thinks start: {whisper_start:.2f}s")
-    print(f"🟦 Applying global offset: {offset:.2f}s")
+    # IMPORTANT:
+    # ignore tiny offsets caused by noise (<0.25 sec)
+    if abs(offset) < 0.25:
+        print(f"🟦 Offset too small ({offset:.2f}s) → ignoring")
+        offset = 0.0
+    else:
+        print(f"🟩 Applying global offset: {offset:.2f}s")
 
-    # --- Apply offset ---
+    # ------------------------------------
+    # 3. APPLY OFFSET TO ALL SEGMENTS
+    # ------------------------------------
     for seg in segments:
         seg.start += offset
         seg.end += offset
 
-    # --- Compute reliable target duration ---
-    # Используем максимум из (оригинальная длительность + сдвиг) и
-    # фактического конца сегментов после применения оффсета.
-    max_segment_end = max((seg.end for seg in segments), default=0.0)
-    timeline_duration = max(total_duration + offset, max_segment_end)
+        # never allow negative start
+        if seg.start < 0:
+            seg.start = 0
 
-    # --- Generate voice-over timeline ---
+    # ------------------------------------
+    # 4. COMPUTE FINAL TRACK LENGTH
+    # ------------------------------------
+    max_segment_end = max(seg.end for seg in segments)
+    timeline_duration = max(total_duration, max_segment_end)
+
+    print(f"🧱 Building voice-over timeline of {timeline_duration:.2f}s")
+
+    # ------------------------------------
+    # 5. GENERATE FINAL TTS AUDIO
+    # ------------------------------------
     final_audio = place_segments_on_timeline(segments, timeline_duration)
 
     export_audio_track(final_audio)
     sanity_check_wav(WAV_OUTPUT, min_duration=max(0.5, timeline_duration - 0.5))
 
     print("🟢 Voice-over track ready!")
+
+
 
 
 
