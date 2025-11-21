@@ -6,6 +6,7 @@ from pipeline.constants import WHISPER_DIR, AUDIO_DIR
 from helpers.validators import assert_valid_whisper
 from helpers.gpt_cleaner import clean_segments_with_gpt
 from helpers.cleaning_utils import is_garbage_arabic   # ← ДОБАВИЛИ
+from helpers.vad_filter import filter_segments_by_vad
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -28,15 +29,18 @@ def whisper_transcribe(audio_file="input.wav", expected_language=None):
     whisper_json = response.model_dump()
 
     # ---------------------------------------------------------
-    # 🧹 1) Удаляем арабский мусор БЕЗ GPT (супернадёжно)
+    # 🧹 1) VAD-фильтр + удаление арабского мусора БЕЗ GPT
     # ---------------------------------------------------------
     segments = whisper_json.get("segments", [])
-    cleaned_segments = []
 
+    # 1a) VAD: убираем сегменты без реальной речи
+    segments = filter_segments_by_vad(segments, audio_path)
+
+    # 1b) Доп. чистка арабского мусора по символам
+    cleaned_segments = []
     for seg in segments:
         text = seg.get("text", "")
 
-        # если мусор → очищаем
         if is_garbage_arabic(text):
             seg["text"] = ""   # 🔥 заменяем мусор на пустую строку
 
