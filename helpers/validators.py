@@ -69,7 +69,7 @@ class TranslationValidationError(Exception):
 def assert_valid_translation(json_path: str, min_ratio=0.5, max_ratio: float | None = 3.0):
     """
     Проверяет:
-    - корректный формат JSON
+    - корректный формат JSON (dict с segments или legacy list)
     - наличие всех обязательных полей
     - корректность отношения длины dst/src (для непустых)
     - допускает пустые переводы только если src пустой (шум)
@@ -78,8 +78,16 @@ def assert_valid_translation(json_path: str, min_ratio=0.5, max_ratio: float | N
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
+    leading_silence = 0.0
+    if isinstance(data, dict):
+        leading_silence = float(data.get("leading_silence", 0.0) or 0.0)
+        data = data.get("segments")
+
     if not isinstance(data, list) or len(data) == 0:
         raise TranslationValidationError("❌ NOT A SEGMENT LIST")
+
+    if leading_silence < 0:
+        raise TranslationValidationError("❌ leading_silence cannot be negative")
 
     for i, seg in enumerate(data):
 

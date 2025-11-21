@@ -1,8 +1,7 @@
 import json
 import os
 
-from pipeline.constants import TRANSLATION_DIR, CHUNKS_DIR, AUDIO_DIR
-from pipeline.speech_onset import detect_speech_onset
+from pipeline.constants import TRANSLATION_DIR, CHUNKS_DIR
 from helpers.validators import assert_valid_chunks
 
 MAX_CHARS = 260          # безопасный лимит для TTS
@@ -10,25 +9,19 @@ MAX_DURATION = 15        # сек. защитный порог по длител
 TRANSLATED_JSON = f"{TRANSLATION_DIR}/translated.json"
 
 
-def compute_global_offset(segments):
+def compute_global_offset(segments, leading_silence: float = 0.0):
     if not segments:
         return 0.0
 
-    source_wav = os.path.join(AUDIO_DIR, "input.wav")
-    if not os.path.exists(source_wav):
-        return 0.0
-
-    try:
-        speech_start = detect_speech_onset(source_wav)
-    except Exception as exc:  # noqa: BLE001 — want to keep pipeline running
-        print(f"⚠️ Unable to detect speech onset: {exc}")
-        return 0.0
-
     first_segment_start = float(segments[0].get("start", 0.0))
-    offset = speech_start - first_segment_start
-    print(
-        f"⏱️ Detected speech onset at {speech_start:.3f}s → applying offset {offset:+.3f}s"
-    )
+    offset = max(leading_silence - first_segment_start, 0.0)
+
+    if offset != 0:
+        print(
+            "⏱️ Restoring preserved leading silence → "
+            f"baseline={leading_silence:.3f}s, offset={offset:+.3f}s"
+        )
+
     return offset
 
 
@@ -37,7 +30,14 @@ def apply_offset(value: float, offset: float) -> float:
 
 def load_segments():
     with open(TRANSLATED_JSON, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+
+    leading_silence = 0.0
+    if isinstance(data, dict):
+        leading_silence = float(data.get("leading_silence", 0.0) or 0.0)
+        data = data.get("segments", [])
+
+    return data, leading_silence
 
 
 def save_chunk(idx, start, end, text, offset):
@@ -64,12 +64,12 @@ def split_into_chunks():
     for f in os.listdir(CHUNKS_DIR):
         os.remove(os.path.join(CHUNKS_DIR, f))
 
-    segments = load_segments()
+    segments, leading_silence = load_segments()
     if not segments:
         print("❌ translated.json is empty — no chunks to create")
         return
 
-    offset = compute_global_offset(segments)
+    offset = compute_global_offset(segments, leading_silence)
 
     chunks = []
     current_text = ""
