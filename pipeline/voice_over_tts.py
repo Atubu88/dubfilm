@@ -291,11 +291,17 @@ def generate_voice_over_track():
         seg.start += offset
         seg.end += offset
 
+    # --- Compute reliable target duration ---
+    # Используем максимум из (оригинальная длительность + сдвиг) и
+    # фактического конца сегментов после применения оффсета.
+    max_segment_end = max((seg.end for seg in segments), default=0.0)
+    timeline_duration = max(total_duration + offset, max_segment_end)
+
     # --- Generate voice-over timeline ---
-    final_audio = place_segments_on_timeline(segments, total_duration + offset)
+    final_audio = place_segments_on_timeline(segments, timeline_duration)
 
     export_audio_track(final_audio)
-    sanity_check_wav(WAV_OUTPUT, min_duration=max(0.5, total_duration - 0.5))
+    sanity_check_wav(WAV_OUTPUT, min_duration=max(0.5, timeline_duration - 0.5))
 
     print("🟢 Voice-over track ready!")
 
