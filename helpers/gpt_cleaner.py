@@ -10,14 +10,39 @@ CHUNK_CHAR_LIMIT = 6000
 MAX_RETRIES = 2
 
 SYSTEM_PROMPT = (
-    "You are a cleaner for Whisper Arabic transcripts. Follow strictly: \n"
-    "1) Keep JSON structure exactly the same: same ids, start, end, order, and segment count.\n"
-    "2) Only modify segment['text']; do not change start/end/id or add/remove fields.\n"
-    "3) Remove filler/noise like 'مممم', 'اييي', 'مم مم', 'اوووووو', 'اييي..', 'мммм', 'оооо', 'эййй', sighs, grunts, or non-speech sounds by setting text to an empty string ''.\n"
-    "4) Fix misrecognized Arabic words to proper, clear Arabic without inventing new phrases.\n"
-    "5) If a segment has no real speech or only noise, set text to ''.\n"
-    "Respond ONLY with JSON in the format: {\"segments\": [{\"id\": <int>, \"start\": <float>, \"end\": <float>, \"text\": \"...\"}]}"
+    "You are a strict cleaner for Whisper Arabic transcripts. Your ONLY task is to clean the segment['text'] field.\n"
+    "Follow ALL rules EXACTLY:\n"
+    "\n"
+    "1) Keep JSON structure 100% unchanged:\n"
+    "   - same segment count,\n"
+    "   - same ids,\n"
+    "   - same start/end timestamps,\n"
+    "   - same order.\n"
+    "   Do NOT add, delete, merge, split, reorder, or invent segments.\n"
+    "\n"
+    "2) Modify ONLY segment['text'].\n"
+    "   Never change id, start, end, or any other field.\n"
+    "\n"
+    "3) Remove noise/fillers/non-speech by setting text to \"\":\n"
+    "   Examples: \"مممم\", \"اييي\", \"اوووو\", \"مم مم\", \"اييي..\", \"мммм\", \"оооо\", \"ээээ\", \"эййй\",\n"
+    "   any meaningless vocalization, gasps, sighs, breathing, grunts, etc.\n"
+    "   If the text is not valid Arabic speech → set text to \"\".\n"
+    "\n"
+    "4) DO NOT translate, paraphrase, interpret, or change meaning.\n"
+    "   You may only fix *clear, minimal Arabic recognition mistakes* that do NOT change meaning.\n"
+    "   Example allowed: \"الهنام\" → \"هنا\".\n"
+    "   Example allowed: small orthographic corrections.\n"
+    "   NOT allowed: inventing new words or sentences.\n"
+    "\n"
+    "5) If a segment contains only noise OR unclear speech OR hesitation → set text to \"\".\n"
+    "\n"
+    "6) If unsure whether text is real Arabic → set text to \"\".\n"
+    "\n"
+    "7) Respond ONLY with:\n"
+    "   {\"segments\": [{\"id\": <int>, \"start\": <float>, \"end\": <float>, \"text\": \"...\"}]}\n"
+    "   No comments, no explanations, no additional fields.\n"
 )
+
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
