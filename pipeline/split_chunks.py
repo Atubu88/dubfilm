@@ -1,21 +1,49 @@
 import json
 import os
-from pipeline.constants import TRANSLATION_DIR, CHUNKS_DIR
+
+from pipeline.constants import TRANSLATION_DIR, CHUNKS_DIR, AUDIO_DIR
+from pipeline.speech_onset import detect_speech_onset
 from helpers.validators import assert_valid_chunks
 
 MAX_CHARS = 260          # безопасный лимит для TTS
 MAX_DURATION = 15        # сек. защитный порог по длительности (≈ 2 предложения)
 TRANSLATED_JSON = f"{TRANSLATION_DIR}/translated.json"
 
+
+def compute_global_offset(segments):
+    if not segments:
+        return 0.0
+
+    source_wav = os.path.join(AUDIO_DIR, "input.wav")
+    if not os.path.exists(source_wav):
+        return 0.0
+
+    try:
+        speech_start = detect_speech_onset(source_wav)
+    except Exception as exc:  # noqa: BLE001 — want to keep pipeline running
+        print(f"⚠️ Unable to detect speech onset: {exc}")
+        return 0.0
+
+    first_segment_start = float(segments[0].get("start", 0.0))
+    offset = speech_start - first_segment_start
+    print(
+        f"⏱️ Detected speech onset at {speech_start:.3f}s → applying offset {offset:+.3f}s"
+    )
+    return offset
+
+
+def apply_offset(value: float, offset: float) -> float:
+    return max(round(value + offset, 3), 0.0)
+
 def load_segments():
     with open(TRANSLATED_JSON, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def save_chunk(idx, start, end, text):
+def save_chunk(idx, start, end, text, offset):
     chunk = {
-        "start": round(start, 3),
-        "end": round(end, 3),
+        "start": apply_offset(start, offset),
+        "end": apply_offset(end, offset),
         "text": text.strip()
     }
 
@@ -37,6 +65,11 @@ def split_into_chunks():
         os.remove(os.path.join(CHUNKS_DIR, f))
 
     segments = load_segments()
+    if not segments:
+        print("❌ translated.json is empty — no chunks to create")
+        return
+
+    offset = compute_global_offset(segments)
 
     chunks = []
     current_text = ""
@@ -61,7 +94,7 @@ def split_into_chunks():
     chunks.append((current_start, current_end, current_text))
 
     for i, (start, end, text) in enumerate(chunks, 1):
-        save_chunk(i, start, end, text)
+        save_chunk(i, start, end, text, offset)
 
     print(f"📦 Created {len(chunks)} chunks")
 
