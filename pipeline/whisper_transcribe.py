@@ -3,8 +3,9 @@ import os
 from openai import OpenAI
 from config import OPENAI_API_KEY
 from pipeline.constants import WHISPER_DIR, AUDIO_DIR
-from helpers.validators import assert_valid_whisper   # ← ДОБАВИЛИ
+from helpers.validators import assert_valid_whisper
 from helpers.gpt_cleaner import clean_segments_with_gpt
+from helpers.cleaning_utils import is_garbage_arabic   # ← ДОБАВИЛИ
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -26,28 +27,56 @@ def whisper_transcribe(audio_file="input.wav", expected_language=None):
 
     whisper_json = response.model_dump()
 
+    # ---------------------------------------------------------
+    # 🧹 1) Удаляем арабский мусор БЕЗ GPT (супернадёжно)
+    # ---------------------------------------------------------
+    segments = whisper_json.get("segments", [])
+    cleaned_segments = []
+
+    for seg in segments:
+        text = seg.get("text", "")
+
+        # если мусор → очищаем
+        if is_garbage_arabic(text):
+            seg["text"] = ""   # 🔥 заменяем мусор на пустую строку
+
+        cleaned_segments.append(seg)
+
+    whisper_json["segments"] = cleaned_segments
+
+    # пересобираем общий text
+    whisper_json["text"] = " ".join(
+        seg["text"].strip() for seg in cleaned_segments if seg.get("text")
+    )
+
+    # ---------------------------------------------------------
+    # 2) Сохраняем whisper raw JSON + TXT
+    # ---------------------------------------------------------
     os.makedirs(WHISPER_DIR, exist_ok=True)
 
     json_path = os.path.join(WHISPER_DIR, "transcript.json")
     txt_path = os.path.join(WHISPER_DIR, "transcript.txt")
 
-    # 📄 Сохраняем JSON — теперь правильно
     with open(json_path, "w", encoding="utf-8") as jf:
         json.dump(whisper_json, jf, ensure_ascii=False, indent=2)
 
-    # 📝 Сохраняем raw-текст
     with open(txt_path, "w", encoding="utf-8") as tf:
         tf.write(whisper_json.get("text", ""))
 
     print(f"📄 JSON saved → {json_path}")
     print(f"📝 TXT saved  → {txt_path}")
 
-    # 🛡 Whisper validation
+    # ---------------------------------------------------------
+    # 3) Проверяем Whisper JSON
+    # ---------------------------------------------------------
     assert_valid_whisper(json_path, expected_language)
 
-    # 🧹 Clean segments with GPT
+    # ---------------------------------------------------------
+    # 4) GPT-cleaner (теперь получает только более чистый текст)
+    # ---------------------------------------------------------
     whisper_json = clean_segments_with_gpt(whisper_json)
 
+    # пересохраняем после GPT-чистки
     with open(json_path, "w", encoding="utf-8") as jf:
         json.dump(whisper_json, jf, ensure_ascii=False, indent=2)
 
