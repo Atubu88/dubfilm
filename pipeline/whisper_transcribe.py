@@ -12,6 +12,40 @@ from helpers.vad_filter import filter_segments_by_vad
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
+def _align_segments_to_first_voice(segments):
+    """Shift timeline so it starts at the first voiced segment."""
+    if not segments:
+        return []
+
+    first_voiced_idx = None
+    for idx, seg in enumerate(segments):
+        if seg.get("text", "").strip():
+            first_voiced_idx = idx
+            break
+
+    # no voiced content left
+    if first_voiced_idx is None:
+        return segments
+
+    # drop leading empty segments
+    trimmed = segments[first_voiced_idx:]
+    offset = float(trimmed[0].get("start", 0.0))
+
+    if offset <= 0:
+        return trimmed
+
+    for seg in trimmed:
+        seg["start"] = max(seg.get("start", 0.0) - offset, 0.0)
+        seg["end"] = max(seg.get("end", 0.0) - offset, seg["start"])
+
+    print(
+        "⏩ Timeline realigned → "
+        f"dropped={first_voiced_idx}, offset={offset:.3f}s"
+    )
+
+    return trimmed
+
+
 def whisper_transcribe(audio_file="input.wav", expected_language=None):
     audio_path = os.path.join(AUDIO_DIR, audio_file)
 
@@ -70,9 +104,11 @@ def whisper_transcribe(audio_file="input.wav", expected_language=None):
 
         cleaned_segments.append(seg)
 
-    whisper_json["segments"] = cleaned_segments
+    aligned_segments = _align_segments_to_first_voice(cleaned_segments)
+
+    whisper_json["segments"] = aligned_segments
     whisper_json["text"] = " ".join(
-        seg["text"].strip() for seg in cleaned_segments if seg.get("text")
+        seg["text"].strip() for seg in aligned_segments if seg.get("text")
     )
 
     # -------------------------
