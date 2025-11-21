@@ -49,10 +49,14 @@ def translate_segments(
     }
 
     system_prompt = (
-        "You are a professional translator. Translate every segment into "
-        f"{target_lang}. KEEP the order and ids exactly the same. "
-        "Respond ONLY with JSON: "
-        '{"segments":[{"id":<int>,"dst":"translated text"}]}'
+        "You are a professional translator. Translate EVERY provided segment into "
+        f"{target_lang} WITHOUT adding, merging, or inventing any text.\n"
+        "RULES:\n"
+        "1) Keep ids and order EXACTLY as provided.\n"
+        "2) One source segment → one translated segment.\n"
+        "3) Never introduce greetings, fillers, or any new sentences.\n"
+        "4) If the source text looks like noise or non-speech → return an empty string for dst.\n"
+        "5) Respond ONLY with JSON: {\"segments\":[{\"id\":<int>,\"dst\":\"translated text\"}]}"
     )
 
     response = client.chat.completions.create(
@@ -134,7 +138,8 @@ def translate_segments(
     # ---------------------------
     # 🔥 6. Проверяем корректность
     # ---------------------------
-    assert_valid_translation(json_out)
+    # Жёстко проверяем длину перевода, чтобы GPT не придумывал лишний текст
+    assert_valid_translation(json_out, max_ratio=3.0)
 
     print("🟢 Translation OK")
 
