@@ -27,6 +27,12 @@ def _align_segments_to_first_voice(segments):
     if first_voiced_idx is None:
         return segments
 
+    # Don't drop any segment that still carries text after VAD refinements.
+    if first_voiced_idx > 0:
+        leading_has_text = any(seg.get("text", "").strip() for seg in segments[:first_voiced_idx])
+        if leading_has_text:
+            first_voiced_idx = 0
+
     # drop leading empty segments
     trimmed = segments[first_voiced_idx:]
     offset = float(trimmed[0].get("start", 0.0))
