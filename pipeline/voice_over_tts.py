@@ -8,12 +8,13 @@ import tempfile
 import wave
 from dataclasses import dataclass
 from typing import List
-from pipeline.detect_speech_start import detect_speech_start
+
 from openai import OpenAI
 from pydub import AudioSegment, effects
 
 from config import OPENAI_API_KEY
 from pipeline.constants import OUTPUT_DIR, TRANSLATION_DIR, WHISPER_DIR
+from pipeline.speech_onset import detect_speech_onset
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -267,9 +268,6 @@ def export_audio_track(audio: AudioSegment) -> None:
     print(f"📦 Copied voice-over track to FINAL_AUDIO → {FINAL_AUDIO}")
 
 
-
-
-
 def generate_voice_over_track():
     segments = load_translated_segments()
     total_duration = load_original_duration(segments)
@@ -277,32 +275,30 @@ def generate_voice_over_track():
     if total_duration <= 0:
         raise VoiceOverError("❌ Unable to determine original duration")
 
-    # --- 🟦 1. Определяем реальное начало речи через VAD ---
+    # --- Speech onset ---
     wav_path = os.path.join("2_audio", "input.wav")
-    real_start = detect_speech_start(wav_path)
-    whisper_start = segments[0].start
+    real_start = detect_speech_onset(wav_path)
 
+    whisper_start = segments[0].start
     offset = real_start - whisper_start
 
     print(f"🟦 Real speech starts at: {real_start:.2f}s")
     print(f"🟦 Whisper thinks start: {whisper_start:.2f}s")
     print(f"🟦 Applying global offset: {offset:.2f}s")
 
-    # --- 🟦 2. Сдвигаем ВСЕ сегменты Whisper ---
+    # --- Apply offset ---
     for seg in segments:
         seg.start += offset
         seg.end += offset
 
-    # --- 🟦 3. Генерируем TTS в обновлённых местах ---
-    final_audio = place_segments_on_timeline(
-        segments,
-        total_duration + offset
-    )
+    # --- Generate voice-over timeline ---
+    final_audio = place_segments_on_timeline(segments, total_duration + offset)
 
     export_audio_track(final_audio)
     sanity_check_wav(WAV_OUTPUT, min_duration=max(0.5, total_duration - 0.5))
 
     print("🟢 Voice-over track ready!")
+
 
 
 if __name__ == "__main__":
