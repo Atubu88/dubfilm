@@ -10,17 +10,13 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 def translate_segments(
         whisper_json="transcript.json",
-        target_lang="en"  # например: "ru", "en", "fr"
+        target_lang="en"
 ):
     """
     🔹 Загружает сегменты Whisper
-    🔹 Отправляет GPT запрос на перевод
-    🔹 Сохраняет новый JSON с 'src' + 'dst'
-    🔹 Проверяет корректность
-
-    ⚠️ Сегментация строго сохраняется — модель получает JSON и обязана
-       вернуть JSON того же размера. Так мы исключаем потери сегментов,
-       которые раньше возникали при парсинге пронумерованных строк.
+    🔹 Отправляет GPT JSON, состоящий ТОЛЬКО из непустых сегментов
+    🔹 Вставляет пустые сегменты обратно
+    🔹 Сохраняет перевод, проверяет структуру
     """
 
     whisper_path = os.path.join(WHISPER_DIR, whisper_json)
@@ -32,23 +28,31 @@ def translate_segments(
 
     print(f"📖 Loaded {len(segments)} segments for translation")
 
-    # 🧠 Отправляем JSON, чтобы исключить двусмысленности при парсинге
+    # ---------------------------
+    # 🔥 1. Разделяем сегменты
+    # ---------------------------
+    empty_segments = [s for s in segments if not s["text"].strip()]
+    non_empty_segments = [s for s in segments if s["text"].strip()]
+
+    print(f"🌑 Empty segments: {len(empty_segments)}")
+    print(f"🟩 To translate: {len(non_empty_segments)}")
+
+    # ---------------------------
+    # 🔥 2. GPT получает только непустые сегменты
+    # ---------------------------
     payload = {
         "target_lang": target_lang,
         "segments": [
-            {
-                "id": seg["id"],
-                "text": seg["text"]
-            }
-            for seg in segments
+            {"id": seg["id"], "text": seg["text"]}
+            for seg in non_empty_segments
         ]
     }
 
     system_prompt = (
-        "You are a professional translator. Translate the provided segments "
-        f"into {target_lang} and keep the order EXACTLY the same. "
-        "Respond ONLY with JSON that matches the schema: "
-        '{"segments": [{"id": <int>, "dst": "translated"}]}'
+        "You are a professional translator. Translate every segment into "
+        f"{target_lang}. KEEP the order and ids exactly the same. "
+        "Respond ONLY with JSON: "
+        '{"segments":[{"id":<int>,"dst":"translated text"}]}'
     )
 
     response = client.chat.completions.create(
@@ -60,42 +64,60 @@ def translate_segments(
         ]
     )
 
+    # ---------------------------
+    # 🔥 3. Разбираем ответ
+    # ---------------------------
     try:
         translated_payload = json.loads(response.choices[0].message.content)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"❌ GPT returned invalid JSON: {exc}") from exc
 
-    translated_lines = translated_payload.get("segments")
+    translated_non_empty = translated_payload.get("segments")
 
-    if not isinstance(translated_lines, list):
-        raise RuntimeError("❌ GPT JSON has no 'segments' list")
+    if not isinstance(translated_non_empty, list):
+        raise RuntimeError("❌ GPT JSON missing 'segments' list")
 
-    if len(translated_lines) != len(segments):
+    if len(translated_non_empty) != len(non_empty_segments):
         raise RuntimeError(
-            f"❌ GPT LOST SEGMENTS ({len(translated_lines)} vs {len(segments)})"
+            f"❌ GPT LOST SEGMENTS ({len(translated_non_empty)} vs {len(non_empty_segments)})"
         )
 
-    # 🏗 СТРОИМ НОВЫЙ JSON
+    # Формируем словарь {id → перевод}
+    translated_dict = {t["id"]: t["dst"].strip() for t in translated_non_empty}
+
+    # ---------------------------
+    # 🔥 4. Восстанавливаем ВСЮ структуру
+    # ---------------------------
     translated_segments = []
 
-    for seg, translated in zip(segments, translated_lines):
-        if seg["id"] != translated.get("id"):
-            raise RuntimeError(
-                f"❌ GPT misaligned IDs: expected {seg['id']} got {translated.get('id')}"
-            )
+    for seg in segments:
 
-        dst_text = translated.get("dst", "").strip()
-        if not dst_text:
-            raise RuntimeError(f"❌ Empty translation for segment {seg['id']}")
+        if not seg["text"].strip():   # пустой сегмент
+            translated_segments.append({
+                "id": seg["id"],
+                "start": seg["start"],
+                "end": seg["end"],
+                "src": seg["text"],
+                "dst": ""
+            })
+            continue
+
+        # непустой сегмент — берём из словаря
+        dst = translated_dict.get(seg["id"], "").strip()
+        if not dst:
+            raise RuntimeError(f"❌ Missing translation for id {seg['id']}")
 
         translated_segments.append({
             "id": seg["id"],
             "start": seg["start"],
             "end": seg["end"],
             "src": seg["text"],
-            "dst": dst_text
+            "dst": dst
         })
 
+    # ---------------------------
+    # 🔥 5. Сохраняем
+    # ---------------------------
     os.makedirs(TRANSLATION_DIR, exist_ok=True)
 
     json_out = os.path.join(TRANSLATION_DIR, "translated.json")
@@ -109,7 +131,9 @@ def translate_segments(
 
     print(f"💾 SAVED → {json_out}")
 
-    # 🛡 ПРОВЕРЯЕМ
+    # ---------------------------
+    # 🔥 6. Проверяем корректность
+    # ---------------------------
     assert_valid_translation(json_out)
 
     print("🟢 Translation OK")
@@ -120,6 +144,6 @@ def translate_segments(
 if __name__ == "__main__":
     out = translate_segments(
         whisper_json="transcript.json",
-        target_lang="ru"   # ⚠️ ТУТ ставь язык перевода
+        target_lang="ru"
     )
     print("✅ Translation saved to:", out)

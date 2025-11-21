@@ -66,7 +66,6 @@ def assert_valid_whisper(json_path: str, expected_language=None):
 class TranslationValidationError(Exception):
     pass
 
-
 def assert_valid_translation(json_path: str, min_ratio=0.5):
     """
     Проверяет:
@@ -83,22 +82,32 @@ def assert_valid_translation(json_path: str, min_ratio=0.5):
 
     for i, seg in enumerate(data):
 
+        # обязательные поля
         for key in ("id", "start", "end", "src", "dst"):
             if key not in seg:
                 raise TranslationValidationError(f"❌ Segment #{i} missing '{key}'")
 
-        if not seg["dst"].strip():
+        src = seg.get("src", "").strip()
+        dst = seg.get("dst", "").strip()
+
+        # 🔥 Правильная логика:
+        # Если src пуст — dst МОЖЕТ быть пустым (это шум, удалённый GPT)
+        # Если src НЕ пуст — dst обязан быть НЕ пустым
+        if not dst and src:
             raise TranslationValidationError(f"❌ Segment #{i} has EMPTY TRANSLATION")
 
-        ratio = len(seg["dst"]) / max(1, len(seg["src"]))
+        # если src пуст — ratio пропускаем
+        if src and dst:
+            ratio = len(dst) / max(1, len(src))
 
-        if ratio < min_ratio:
-            raise TranslationValidationError(
-                f"❌ Segment #{i} TOO SHORT → ratio={ratio:.2f}"
-            )
+            if ratio < min_ratio:
+                raise TranslationValidationError(
+                    f"❌ Segment #{i} TOO SHORT → ratio={ratio:.2f}"
+                )
 
     print(f"✅ Translation VALID → {len(data)} segments OK")
     return True
+
 
 
 
