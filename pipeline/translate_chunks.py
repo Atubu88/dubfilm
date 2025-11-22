@@ -84,9 +84,17 @@ def translate_segments(
                 f"❌ GPT misaligned IDs: expected {seg['id']} got {translated.get('id')}"
             )
 
-        dst_text = translated.get("dst", "").strip()
-        if not dst_text:
-            raise RuntimeError(f"❌ Empty translation for segment {seg['id']}")
+        dst_text = translated.get("dst", "")
+
+        # Если GPT вернул пустую строку, подставляем исходный текст,
+        # чтобы не ронять весь пайплайн из-за одного сегмента
+        if not dst_text or not dst_text.strip():
+            print(
+                f"⚠️  Empty translation for segment {seg['id']} — using source text"
+            )
+            dst_text = seg["text"]
+        else:
+            dst_text = dst_text.strip()
 
         translated_segments.append({
             "id": seg["id"],
