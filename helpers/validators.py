@@ -4,10 +4,10 @@ import os
 class WhisperValidationError(Exception):
     pass
 
-
 def assert_valid_whisper(json_path: str, expected_language=None):
     """
-    Проверяет корректность Whisper JSON, созданного через response.model_dump()
+    Проверяет корректность Whisper JSON, созданного через response.model_dump(),
+    но допускает пустые сегменты (тишина, шум, VAD/GPT очистка).
     """
 
     if not os.path.exists(json_path):
@@ -20,37 +20,44 @@ def assert_valid_whisper(json_path: str, expected_language=None):
     except Exception as e:
         raise WhisperValidationError(f"❌ INVALID JSON → {e}")
 
-    # ---- MUST contain final text ----
-    if "text" not in data or len(data["text"].strip()) < 3:
-        raise WhisperValidationError("❌ Whisper JSON contains EMPTY text")
-
     # ---- SEGMENTS ----
     segments = data.get("segments")
     if not segments:
         raise WhisperValidationError("❌ Whisper JSON has NO SEGMENTS")
 
+    # ---- Whisper “text” может быть пустым после VAD/GPT → нельзя падать ----
+    # Вместо этого проверяем: есть ли хотя бы один сегмент с текстом
+    has_voiced = any(seg.get("text", "").strip() for seg in segments)
+    if not has_voiced:
+        raise WhisperValidationError("❌ Whisper contains NO voiced segments after cleaning")
+
+    # ---- Проверяем сегменты ----
     for i, seg in enumerate(segments):
 
-        # MUST have required fields
+        # обязательные ключи
         for key in ("start", "end", "text"):
             if key not in seg:
                 raise WhisperValidationError(f"❌ Segment #{i} missing key '{key}'")
 
-        # Timestamps must be valid
-        if seg["end"] <= seg["start"]:
-            raise WhisperValidationError(f"❌ Segment #{i} invalid timestamps")
+        # валидные таймстампы
+        try:
+            start = float(seg["start"])
+            end = float(seg["end"])
+        except Exception:
+            raise WhisperValidationError(f"❌ Segment #{i} invalid start/end values")
 
-        # Text must not be empty
+        if end <= start:
+            raise WhisperValidationError(f"❌ Segment #{i} invalid timestamps (end <= start)")
+
+        # пустой текст — допустимо (тишина/шум)
         if not seg["text"].strip():
-            raise WhisperValidationError(f"❌ Segment #{i} has EMPTY text")
+            print(f"⚠️ Whisper: segment #{i} empty (silence/noise)")
 
     # ---- LANGUAGE CHECK ----
     detected_lang = data.get("language")
 
-    # Accept both "ar" and "arabic"
     if expected_language:
         valid_forms = {expected_language}
-
         if expected_language == "ar":
             valid_forms.add("arabic")
 
