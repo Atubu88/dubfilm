@@ -6,6 +6,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 BOT_TOKEN      = os.getenv("BOT_TOKEN")
 ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY")
+TRANSCRIBE_PROVIDER = os.getenv("TRANSCRIBE_PROVIDER", "assemblyai").lower()
 INPUT_DIR       = "1_input"
 AUDIO_DIR       = "2_audio"
 WHISPER_DIR     = "3_whisper"
