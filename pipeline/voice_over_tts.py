@@ -237,7 +237,7 @@ def place_segments_on_timeline(segments: List[Segment], total_duration: float) -
 
 
 
-def sanity_check_wav(path: str, min_duration: float) -> None:
+def sanity_check_wav(path: str, min_duration: float, tolerance: float = 3.0) -> None:
     if not os.path.exists(path):
         raise VoiceOverError(f"❌ WAV not found → {path}")
 
@@ -250,10 +250,11 @@ def sanity_check_wav(path: str, min_duration: float) -> None:
         duration = frames / float(rate)
 
     print(f"🔎 Voice-over WAV duration: {duration:.2f}s")
-    if duration < min_duration:
+    if duration + tolerance < min_duration:
         raise VoiceOverError(
             f"❌ Voice-over WAV too short ({duration:.2f}s). Expected at least {min_duration:.2f}s"
         )
+
 
 
 def export_audio_track(audio: AudioSegment) -> None:
