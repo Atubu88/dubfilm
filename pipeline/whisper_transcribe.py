@@ -1,15 +1,17 @@
 import json
 import os
+import re
 import time
+
 import requests
 from openai import OpenAI
-from config import OPENAI_API_KEY, ASSEMBLYAI_API_KEY, TRANSCRIBE_PROVIDER
-from pipeline.constants import WHISPER_DIR, AUDIO_DIR
-from helpers.validators import assert_valid_whisper
-from helpers.gpt_cleaner import clean_segments_with_gpt
-
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
+
+from config import OPENAI_API_KEY, ASSEMBLYAI_API_KEY, TRANSCRIBE_PROVIDER
+from helpers.gpt_cleaner import clean_segments_with_gpt
+from helpers.validators import assert_valid_whisper
+from pipeline.constants import AUDIO_DIR, WHISPER_DIR
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 ASSEMBLYAI_API_URL = "https://api.assemblyai.com/v2"
@@ -43,6 +45,13 @@ def segment_by_silence(audio_path: str, full_text: str):
             "text": full_text.strip()
         }]
 
+    def _split_sentences(text: str):
+        pattern = re.compile(r"[^.!?…]+(?:[.!?…]+|$)")
+        return [s.strip() for s in pattern.findall(text) if s.strip()]
+
+    def _word_count(phrase: str) -> int:
+        return len([w for w in phrase.split() if w])
+
     # Определяем start/end каждого сегмента
     segments = []
     cursor = 0
@@ -52,20 +61,49 @@ def segment_by_silence(audio_path: str, full_text: str):
         segments.append((start, end))
         cursor = end
 
-    # Текст делим по количеству сегментов
-    words = full_text.split()
-    chunk_size = max(1, len(words) // len(segments))
+    durations = [end - start for start, end in segments]
+    total_duration = sum(durations) or 1
+
+    sentences = _split_sentences(full_text)
+    sentence_counts = [(sentence, _word_count(sentence)) for sentence in sentences]
+    remaining_words = sum(count for _, count in sentence_counts)
 
     whisper_segments = []
-    word_idx = 0
 
-    for i, (start, end) in enumerate(segments):
-        chunk_words = words[word_idx: word_idx + chunk_size]
-        word_idx += chunk_size
+    for idx, (start, end) in enumerate(segments):
+        remaining_segments = len(segments) - idx
 
-        text_part = " ".join(chunk_words).strip()
-        if not text_part:
-            continue
+        if not sentence_counts:
+            break
+
+        if remaining_segments == 1:
+            picked = sentence_counts
+            sentence_counts = []
+        else:
+            remaining_duration = sum(durations[idx:]) or total_duration
+            target = max(1, round(remaining_words * durations[idx] / remaining_duration))
+
+            picked = []
+            picked_words = 0
+
+            while sentence_counts:
+                # гарантируем, что впереди останется хотя бы 1 предложение на сегмент
+                if len(sentence_counts) <= (remaining_segments - 1) and picked:
+                    break
+
+                sentence, count = sentence_counts[0]
+
+                # если уже есть текст и следующая фраза выбивается из окна — завершаем
+                if picked and picked_words + count > target:
+                    break
+
+                picked.append(sentence_counts.pop(0))
+                picked_words += count
+
+            if not picked:
+                picked.append(sentence_counts.pop(0))
+
+        text_part = " ".join(sentence for sentence, _ in picked).strip()
 
         whisper_segments.append({
             "id": len(whisper_segments),
@@ -74,9 +112,7 @@ def segment_by_silence(audio_path: str, full_text: str):
             "text": text_part
         })
 
-    # Добавляем остаток текста в последний сегмент
-    if word_idx < len(words):
-        whisper_segments[-1]["text"] += " " + " ".join(words[word_idx:])
+        remaining_words -= sum(count for _, count in picked)
 
     return whisper_segments
 
