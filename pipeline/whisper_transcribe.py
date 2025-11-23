@@ -6,7 +6,7 @@ import time
 import requests
 from openai import OpenAI
 from pydub import AudioSegment
-from pydub.silence import split_on_silence
+from pydub.silence import detect_nonsilent
 
 from config import OPENAI_API_KEY, ASSEMBLYAI_API_KEY, TRANSCRIBE_PROVIDER
 from helpers.gpt_cleaner import clean_segments_with_gpt
@@ -31,14 +31,16 @@ def segment_by_silence(audio_path: str, full_text: str):
     # 🔥 Адаптивный порог тишины
     silence_threshold = audio.dBFS - 15
 
-    chunks = split_on_silence(
+    MIN_SILENCE_MS = 220
+    PADDING_MS = 80
+
+    ranges = detect_nonsilent(
         audio,
-        min_silence_len=220,             # 0.22 сек → подходит для арабской речи
-        silence_thresh=silence_threshold,
-        keep_silence=80
+        min_silence_len=MIN_SILENCE_MS,
+        silence_thresh=silence_threshold
     )
 
-    if not chunks:
+    if not ranges:
         # fallback: один сегмент
         return [{
             "id": 0,
@@ -46,6 +48,19 @@ def segment_by_silence(audio_path: str, full_text: str):
             "end": len(audio) / 1000,
             "text": full_text.strip()
         }]
+
+    # Добавляем небольшой паддинг, чтобы сегмент захватывал естественные паузы,
+    # но объединяем перекрывающиеся области, чтобы каждый сегмент соответствовал
+    # одному непрерывному фрагменту речи.
+    padded_segments = []
+    for start, end in ranges:
+        padded_start = max(0, start - PADDING_MS)
+        padded_end = min(len(audio), end + PADDING_MS)
+
+        if padded_segments and padded_start <= padded_segments[-1][1]:
+            padded_segments[-1][1] = max(padded_segments[-1][1], padded_end)
+        else:
+            padded_segments.append([padded_start, padded_end])
 
     # ⭐ Разбиваем текст на предложения с учетом арабского языка
     pattern = re.compile(r"[^.!?؟…]+(?:[.!?؟…]+|$)")
@@ -55,15 +70,7 @@ def segment_by_silence(audio_path: str, full_text: str):
         return len(s.split())
 
     # Считаем длину каждого аудио-сегмента
-    segments = []
-    cursor = 0
-    for chunk in chunks:
-        start = cursor
-        end = cursor + len(chunk)
-        segments.append((start, end))
-        cursor = end
-
-    durations = [end - start for start, end in segments]
+    durations = [end - start for start, end in padded_segments]
     total_duration = sum(durations) or 1
 
     # Готовим предложения (sentence + word_count)
@@ -72,8 +79,8 @@ def segment_by_silence(audio_path: str, full_text: str):
 
     whisper_segments = []
 
-    for idx, (start, end) in enumerate(segments):
-        remaining_segments = len(segments) - idx
+    for idx, (start, end) in enumerate(padded_segments):
+        remaining_segments = len(padded_segments) - idx
 
         if not sentence_data:
             break
