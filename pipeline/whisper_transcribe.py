@@ -18,22 +18,24 @@ ASSEMBLYAI_API_URL = "https://api.assemblyai.com/v2"
 
 
 # ============================================================
-# ⭐ 1. ПРОФЕССИОНАЛЬНАЯ СЕГМЕНТАЦИЯ — ПО ПАУЗАМ В АУДИО ⭐
+# ⭐ 1. ПРОФЕССИОНАЛЬНАЯ СЕГМЕНТАЦИЯ — ПО ТИШИНЕ ⭐
 # ============================================================
 
 def segment_by_silence(audio_path: str, full_text: str):
     """
-    Делит аудио по паузам и распределяет текст по сегментам.
-    Возвращает сегменты полностью в стиле Whisper CLI.
+    Делим аудио по паузам → затем равномерно распределяем текст по сегментам.
     """
 
-    audio = AudioSegment.from_wav(audio_path)
+    audio = AudioSegment.from_file(audio_path)
+
+    # 🔥 Адаптивный порог тишины
+    silence_threshold = audio.dBFS - 15
 
     chunks = split_on_silence(
         audio,
-        min_silence_len=350,       # пауза ≥ 0.35 сек = граница фразы
-        silence_thresh=-40,        # порог тишины
-        keep_silence=120           # сохраняем небольшой хвост тишины
+        min_silence_len=220,             # 0.22 сек → подходит для арабской речи
+        silence_thresh=silence_threshold,
+        keep_silence=80
     )
 
     if not chunks:
@@ -45,14 +47,14 @@ def segment_by_silence(audio_path: str, full_text: str):
             "text": full_text.strip()
         }]
 
-    def _split_sentences(text: str):
-        pattern = re.compile(r"[^.!?…]+(?:[.!?…]+|$)")
-        return [s.strip() for s in pattern.findall(text) if s.strip()]
+    # ⭐ Разбиваем текст на предложения с учетом арабского языка
+    pattern = re.compile(r"[^.!?؟…]+(?:[.!?؟…]+|$)")
+    sentences = [s.strip() for s in pattern.findall(full_text) if s.strip()]
 
-    def _word_count(phrase: str) -> int:
-        return len([w for w in phrase.split() if w])
+    def count_words(s):
+        return len(s.split())
 
-    # Определяем start/end каждого сегмента
+    # Считаем длину каждого аудио-сегмента
     segments = []
     cursor = 0
     for chunk in chunks:
@@ -64,66 +66,67 @@ def segment_by_silence(audio_path: str, full_text: str):
     durations = [end - start for start, end in segments]
     total_duration = sum(durations) or 1
 
-    sentences = _split_sentences(full_text)
-    sentence_counts = [(sentence, _word_count(sentence)) for sentence in sentences]
-    remaining_words = sum(count for _, count in sentence_counts)
+    # Готовим предложения (sentence + word_count)
+    sentence_data = [(s, count_words(s)) for s in sentences]
+    total_words = sum(cnt for _, cnt in sentence_data)
 
     whisper_segments = []
 
     for idx, (start, end) in enumerate(segments):
         remaining_segments = len(segments) - idx
 
-        if not sentence_counts:
+        if not sentence_data:
             break
 
+        # Последний сегмент — кладём всё оставшееся
         if remaining_segments == 1:
-            picked = sentence_counts
-            sentence_counts = []
+            picked = sentence_data
+            sentence_data = []
         else:
-            remaining_duration = sum(durations[idx:]) or total_duration
-            target = max(1, round(remaining_words * durations[idx] / remaining_duration))
+            remaining_dur = sum(durations[idx:])
+            target = max(1, round(total_words * durations[idx] / remaining_dur))
 
             picked = []
             picked_words = 0
 
-            while sentence_counts:
-                # гарантируем, что впереди останется хотя бы 1 предложение на сегмент
-                if len(sentence_counts) <= (remaining_segments - 1) and picked:
+            while sentence_data:
+                # Чтобы впереди остался хотя бы один sentence
+                if len(sentence_data) <= (remaining_segments - 1) and picked:
                     break
 
-                sentence, count = sentence_counts[0]
+                sent, count = sentence_data[0]
 
-                # если уже есть текст и следующая фраза выбивается из окна — завершаем
+                # Не переполняем сегмент
                 if picked and picked_words + count > target:
                     break
 
-                picked.append(sentence_counts.pop(0))
+                picked.append(sentence_data.pop(0))
                 picked_words += count
 
+            # safety fallback
             if not picked:
-                picked.append(sentence_counts.pop(0))
+                picked.append(sentence_data.pop(0))
 
-        text_part = " ".join(sentence for sentence, _ in picked).strip()
+        text = " ".join(s for s, _ in picked).strip()
+        total_words -= sum(cnt for _, cnt in picked)
 
         whisper_segments.append({
             "id": len(whisper_segments),
             "start": start / 1000,
             "end": end / 1000,
-            "text": text_part
+            "text": text
         })
-
-        remaining_words -= sum(count for _, count in picked)
 
     return whisper_segments
 
 
 # ============================================================
-# ⭐ 2. AssemblyAI — получаем текст, но сегменты уже НЕ используем ⭐
+# ⭐ 2. AssemblyAI без их сегментов — мы делаем свои ⭐
 # ============================================================
 
 def _transcribe_with_assemblyai(audio_path, expected_language=None):
     if not ASSEMBLYAI_API_KEY:
-        raise RuntimeError("❌ ASSEMBLYAI_API_KEY is missing")
+        raise RuntimeError("❌ ASSEMBLYAI_API_KEY missing")
 
     headers = {"authorization": ASSEMBLYAI_API_KEY}
 
@@ -132,7 +135,7 @@ def _transcribe_with_assemblyai(audio_path, expected_language=None):
             while chunk := f.read(5_242_880):
                 yield chunk
 
-    print("⬆️  Uploading audio to AssemblyAI...")
+    print("⬆️  Uploading audio...")
     upload_resp = requests.post(
         f"{ASSEMBLYAI_API_URL}/upload",
         headers=headers,
@@ -144,12 +147,12 @@ def _transcribe_with_assemblyai(audio_path, expected_language=None):
     payload = {
         "audio_url": audio_url,
         "speech_model": "universal",
-        "punctuate": True,
+        "punctuate": True
     }
     if expected_language:
         payload["language_code"] = expected_language
 
-    print("🛰  Requesting AssemblyAI transcription...")
+    print("🛰  Requesting transcription...")
     resp = requests.post(
         f"{ASSEMBLYAI_API_URL}/transcript",
         json=payload,
@@ -158,8 +161,8 @@ def _transcribe_with_assemblyai(audio_path, expected_language=None):
     resp.raise_for_status()
     transcript_id = resp.json()["id"]
 
-    # Ждем результата
     poll_url = f"{ASSEMBLYAI_API_URL}/transcript/{transcript_id}"
+
     while True:
         poll = requests.get(poll_url, headers=headers).json()
         if poll["status"] == "completed":
@@ -170,8 +173,6 @@ def _transcribe_with_assemblyai(audio_path, expected_language=None):
         time.sleep(3)
 
     full_text = poll.get("text", "").strip()
-
-    # ⭐ Подставляем НАШИ сегменты — по тишине ⭐
     segments = segment_by_silence(audio_path, full_text)
 
     return {
@@ -183,19 +184,18 @@ def _transcribe_with_assemblyai(audio_path, expected_language=None):
 
 
 # ============================================================
-# ⭐ 3. Whisper API (без сегментов в API) ⭐
+# ⭐ 3. Whisper API → сегменты тоже по паузам ⭐
 # ============================================================
 
 def _transcribe_with_whisper(audio_path, expected_language=None):
     with open(audio_path, "rb") as f:
-        response = client.audio.transcriptions.create(
+        resp = client.audio.transcriptions.create(
             model="whisper-1",
             file=f,
             response_format="verbose_json"
         )
-    result = response.model_dump()
+    result = resp.model_dump()
 
-    # Whisper API не возвращает сегменты — делаем сами
     full_text = result.get("text", "")
     segments = segment_by_silence(audio_path, full_text)
 
@@ -204,7 +204,7 @@ def _transcribe_with_whisper(audio_path, expected_language=None):
 
 
 # ============================================================
-# ⭐ 4. Основная функция whisper_transcribe() ⭐
+# ⭐ 4. Основная функция ⭐
 # ============================================================
 
 def whisper_transcribe(audio_file="input.wav", expected_language=None):
@@ -217,32 +217,32 @@ def whisper_transcribe(audio_file="input.wav", expected_language=None):
     print(f"🎧 Transcribing using {provider}: {audio_path}")
 
     if provider == "whisper":
-        whisper_json = _transcribe_with_whisper(audio_path, expected_language)
+        data = _transcribe_with_whisper(audio_path, expected_language)
     else:
-        whisper_json = _transcribe_with_assemblyai(audio_path, expected_language)
+        data = _transcribe_with_assemblyai(audio_path, expected_language)
 
     os.makedirs(WHISPER_DIR, exist_ok=True)
 
     json_path = os.path.join(WHISPER_DIR, "transcript.json")
     txt_path = os.path.join(WHISPER_DIR, "transcript.txt")
 
-    # Сохраняем
     with open(json_path, "w", encoding="utf-8") as jf:
-        json.dump(whisper_json, jf, ensure_ascii=False, indent=2)
+        json.dump(data, jf, ensure_ascii=False, indent=2)
 
     with open(txt_path, "w", encoding="utf-8") as tf:
-        tf.write(whisper_json.get("text", ""))
+        tf.write(data.get("text", ""))
 
     print("📄 JSON saved")
     print("📝 TXT saved")
 
-    # Валидация
+    # Валидация структуры
     assert_valid_whisper(json_path, expected_language)
 
-    # Очистка GPT
-    whisper_json = clean_segments_with_gpt(whisper_json)
+    # GPT очистка сегментов
+    cleaned = clean_segments_with_gpt(data)
+
     with open(json_path, "w", encoding="utf-8") as jf:
-        json.dump(whisper_json, jf, indent=2, ensure_ascii=False)
+        json.dump(cleaned, jf, ensure_ascii=False, indent=2)
 
     print("🟢 Whisper validation PASSED")
     return json_path
