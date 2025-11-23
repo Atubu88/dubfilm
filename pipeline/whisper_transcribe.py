@@ -3,10 +3,10 @@ import os
 import re
 import time
 
+import numpy as np
 import requests
 from openai import OpenAI
 from pydub import AudioSegment
-from pydub.silence import detect_nonsilent
 
 from config import OPENAI_API_KEY, ASSEMBLYAI_API_KEY, TRANSCRIBE_PROVIDER
 from helpers.gpt_cleaner import clean_segments_with_gpt
@@ -18,49 +18,118 @@ ASSEMBLYAI_API_URL = "https://api.assemblyai.com/v2"
 
 
 # ============================================================
-# ⭐ 1. ПРОФЕССИОНАЛЬНАЯ СЕГМЕНТАЦИЯ — ПО ТИШИНЕ ⭐
+# ⭐ 1. НАДЁЖНАЯ СЕГМЕНТАЦИЯ — ЭНЕРГЕТИЧЕСКИЙ VAD ⭐
 # ============================================================
+
+def _detect_speech_regions(audio_path: str, frame_ms: int = 15):
+    """Возвращает интервалы речи [start_ms, end_ms] без сторонних VAD зависимостей.
+
+    Используем энергию полосы 0..8к Гц, скользящее среднее и гистерезис, чтобы:
+    - не залипать на шуме/музыке,
+    - надёжно найти реальное начало речи (не 0.0),
+    - уважать паузы между фразами.
+    """
+
+    audio = AudioSegment.from_file(audio_path).set_channels(1).set_frame_rate(16000)
+    samples = np.array(audio.get_array_of_samples()).astype(np.float32)
+
+    if samples.size == 0:
+        return []
+
+    frame_len = int(16000 * frame_ms / 1000)
+    if frame_len <= 0:
+        frame_len = 240
+
+    # Нормализуем, чтобы пороги не зависели от громкости файла
+    peak = np.max(np.abs(samples)) or 1.0
+    samples = samples / peak
+
+    energies = []
+    for i in range(0, len(samples), frame_len):
+        frame = samples[i:i + frame_len]
+        if frame.size == 0:
+            break
+        energies.append(float(np.mean(np.abs(frame))))
+
+    if not energies:
+        return []
+
+    energies = np.array(energies)
+
+    # Сглаживание, чтобы одиночные выбросы не превращались в «речь»
+    if len(energies) > 4:
+        kernel = np.ones(5) / 5
+        energies = np.convolve(energies, kernel, mode="same")
+
+    noise_floor = np.percentile(energies, 20)
+    speech_threshold = max(noise_floor * 3.5, np.percentile(energies, 70))
+    release_threshold = speech_threshold * 0.55
+
+    min_speech_frames = max(1, int(320 / frame_ms))  # >= 0.32s речи
+    min_gap_frames = max(1, int(180 / frame_ms))      # >= 0.18s тишины, чтобы закрыть сегмент
+
+    segments = []
+    in_speech = False
+    speech_start = 0
+    below_count = 0
+
+    for idx, energy in enumerate(energies):
+        if not in_speech and energy >= speech_threshold:
+            in_speech = True
+            speech_start = idx
+            below_count = 0
+            continue
+
+        if in_speech:
+            if energy < release_threshold:
+                below_count += 1
+                if below_count >= min_gap_frames:
+                    speech_end = idx - below_count + 1
+                    if speech_end - speech_start >= min_speech_frames:
+                        segments.append((speech_start, speech_end))
+                    in_speech = False
+                    below_count = 0
+            else:
+                below_count = 0
+
+    if in_speech:
+        speech_end = len(energies) - 1
+        if speech_end - speech_start >= min_speech_frames:
+            segments.append((speech_start, speech_end))
+
+    if not segments:
+        return []
+
+    pad_ms = 120
+    merged = []
+    for start_f, end_f in segments:
+        start_ms = max(0, start_f * frame_ms - pad_ms)
+        end_ms = min(len(audio), (end_f + 1) * frame_ms + pad_ms)
+
+        if merged and start_ms <= merged[-1][1] + 80:
+            merged[-1][1] = max(merged[-1][1], end_ms)
+        else:
+            merged.append([start_ms, end_ms])
+
+    return merged
+
 
 def segment_by_silence(audio_path: str, full_text: str):
     """
-    Делим аудио по паузам → затем равномерно распределяем текст по сегментам.
+    Делим аудио по паузам (энергетический VAD) → распределяем текст по сегментам.
     """
 
-    audio = AudioSegment.from_file(audio_path)
+    padded_segments = _detect_speech_regions(audio_path)
 
-    # 🔥 Адаптивный порог тишины
-    silence_threshold = audio.dBFS - 15
-
-    MIN_SILENCE_MS = 220
-    PADDING_MS = 80
-
-    ranges = detect_nonsilent(
-        audio,
-        min_silence_len=MIN_SILENCE_MS,
-        silence_thresh=silence_threshold
-    )
-
-    if not ranges:
+    if not padded_segments:
         # fallback: один сегмент
+        audio = AudioSegment.from_file(audio_path)
         return [{
             "id": 0,
             "start": 0.0,
             "end": len(audio) / 1000,
             "text": full_text.strip()
         }]
-
-    # Добавляем небольшой паддинг, чтобы сегмент захватывал естественные паузы,
-    # но объединяем перекрывающиеся области, чтобы каждый сегмент соответствовал
-    # одному непрерывному фрагменту речи.
-    padded_segments = []
-    for start, end in ranges:
-        padded_start = max(0, start - PADDING_MS)
-        padded_end = min(len(audio), end + PADDING_MS)
-
-        if padded_segments and padded_start <= padded_segments[-1][1]:
-            padded_segments[-1][1] = max(padded_segments[-1][1], padded_end)
-        else:
-            padded_segments.append([padded_start, padded_end])
 
     # ⭐ Разбиваем текст на предложения с учетом арабского языка
     pattern = re.compile(r"[^.!?؟…]+(?:[.!?؟…]+|$)")
@@ -69,11 +138,7 @@ def segment_by_silence(audio_path: str, full_text: str):
     def count_words(s):
         return len(s.split())
 
-    # Считаем длину каждого аудио-сегмента
     durations = [end - start for start, end in padded_segments]
-    total_duration = sum(durations) or 1
-
-    # Готовим предложения (sentence + word_count)
     sentence_data = [(s, count_words(s)) for s in sentences]
     total_words = sum(cnt for _, cnt in sentence_data)
 
@@ -81,17 +146,19 @@ def segment_by_silence(audio_path: str, full_text: str):
 
     for idx, (start, end) in enumerate(padded_segments):
         remaining_segments = len(padded_segments) - idx
+        remaining_dur = sum(durations[idx:]) or 1
 
         if not sentence_data:
             break
 
-        # Последний сегмент — кладём всё оставшееся
         if remaining_segments == 1:
             picked = sentence_data
             sentence_data = []
         else:
-            remaining_dur = sum(durations[idx:])
-            target = max(1, round(total_words * durations[idx] / remaining_dur))
+            # Сколько слов реально поместится в сегмент (≈3.2 слова/сек)
+            max_for_time = max(1, int(round((durations[idx] / 1000.0) * 3.2)))
+            target_by_ratio = max(1, round(total_words * durations[idx] / remaining_dur))
+            target = min(max_for_time, target_by_ratio)
 
             picked = []
             picked_words = 0
