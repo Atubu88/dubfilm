@@ -6,7 +6,7 @@ import time
 import requests
 from openai import OpenAI
 from pydub import AudioSegment
-from pydub.silence import split_on_silence
+from pydub.silence import detect_nonsilent, detect_silence
 
 from config import OPENAI_API_KEY, ASSEMBLYAI_API_KEY, TRANSCRIBE_PROVIDER
 from helpers.gpt_cleaner import clean_segments_with_gpt
@@ -31,15 +31,93 @@ def segment_by_silence(audio_path: str, full_text: str):
     # 🔥 Адаптивный порог тишины
     silence_threshold = audio.dBFS - 15
 
-    chunks = split_on_silence(
+    # Используем реальные паузы: учитываем позиции тишины, а не только длину куска
+    min_pause_ms = 950
+    keep_silence_ms = 350
+    min_segment_ms = 5000
+    max_segment_ms = 22000
+
+    # Точные позиции тишины (>= ~1 сек). Если их нет — не режем аудио.
+    long_pauses = detect_silence(
         audio,
-        min_silence_len=220,             # 0.22 сек → подходит для арабской речи
-        silence_thresh=silence_threshold,
-        keep_silence=80
+        min_silence_len=min_pause_ms,
+        silence_thresh=silence_threshold
     )
 
-    if not chunks:
-        # fallback: один сегмент
+    if not long_pauses:
+        return [{
+            "id": 0,
+            "start": 0.0,
+            "end": len(audio) / 1000,
+            "text": full_text.strip()
+        }]
+
+    # Формируем сегменты по реальным таймкодам тишины, сохраняя края паузы
+    segments_ms = []
+    cursor = 0
+    pad = keep_silence_ms // 2
+
+    for pause_start, pause_end in long_pauses:
+        seg_end = max(cursor, pause_start + pad)
+        if seg_end - cursor > 0:
+            segments_ms.append([cursor, seg_end])
+        cursor = max(seg_end, pause_end - pad)
+
+    if cursor < len(audio):
+        segments_ms.append([cursor, len(audio)])
+
+    segments_ms = [seg for seg in segments_ms if seg[1] - seg[0] > 0]
+
+    # Если пауз мало → не дробим аудио на искусственные куски
+    if len(segments_ms) < 3:
+        return [{
+            "id": 0,
+            "start": 0.0,
+            "end": len(audio) / 1000,
+            "text": full_text.strip()
+        }]
+
+    # Сливаем короткие сегменты, чтобы минимальная длина была 4–6 секунд
+    merged_segments = []
+    acc_start, acc_end = None, None
+    for start, end in segments_ms:
+        if acc_start is None:
+            acc_start, acc_end = start, end
+            continue
+
+        if acc_end - acc_start < min_segment_ms:
+            acc_end = end
+        elif end - start < min_segment_ms:
+            acc_end = end
+        else:
+            merged_segments.append([acc_start, acc_end])
+            acc_start, acc_end = start, end
+
+    if acc_start is not None:
+        merged_segments.append([acc_start, acc_end])
+
+    if len(merged_segments) > 1 and merged_segments[-1][1] - merged_segments[-1][0] < min_segment_ms:
+        merged_segments[-2][1] = merged_segments[-1][1]
+        merged_segments.pop()
+
+    # Контроль огромных сегментов: делим слишком длинные, но только крупные (>> 20 c)
+    bounded_segments = []
+    for start, end in merged_segments:
+        duration = end - start
+        if duration <= max_segment_ms or duration <= min_segment_ms * 2:
+            bounded_segments.append([start, end])
+            continue
+
+        parts = max(1, round(duration / max_segment_ms))
+        step = duration / parts
+        for i in range(parts):
+            seg_start = int(start + i * step)
+            seg_end = int(start + (i + 1) * step)
+            bounded_segments.append([seg_start, seg_end])
+
+    segments_ms = bounded_segments
+
+    if len(segments_ms) < 3:
         return [{
             "id": 0,
             "start": 0.0,
@@ -54,68 +132,104 @@ def segment_by_silence(audio_path: str, full_text: str):
     def count_words(s):
         return len(s.split())
 
-    # Считаем длину каждого аудио-сегмента
-    segments = []
-    cursor = 0
-    for chunk in chunks:
-        start = cursor
-        end = cursor + len(chunk)
-        segments.append((start, end))
-        cursor = end
+    # Реальный объём речи в каждом сегменте (а не длина паузы)
+    speech_ranges = detect_nonsilent(
+        audio,
+        min_silence_len=200,
+        silence_thresh=silence_threshold
+    )
 
-    durations = [end - start for start, end in segments]
-    total_duration = sum(durations) or 1
+    def speech_duration_ms(seg_start, seg_end):
+        total = 0
+        for speech_start, speech_end in speech_ranges:
+            overlap = max(0, min(seg_end, speech_end) - max(seg_start, speech_start))
+            total += overlap
+        return total
 
-    # Готовим предложения (sentence + word_count)
-    sentence_data = [(s, count_words(s)) for s in sentences]
-    total_words = sum(cnt for _, cnt in sentence_data)
+    def estimate_tts_ms(text: str) -> int:
+        words = len(text.split())
+        if not words:
+            return 0
+        # ~0.43 c/слово + небольшой запас на паузы
+        return max(1200, int(words * 430))
 
-    whisper_segments = []
+    def distribute_text(segment_windows):
+        sentence_data = [(s, count_words(s)) for s in sentences]
+        total_words = sum(cnt for _, cnt in sentence_data)
 
-    for idx, (start, end) in enumerate(segments):
-        remaining_segments = len(segments) - idx
+        # веса по реальной речи; если не нашли — используем 60% длительности
+        weights = []
+        for start, end in segment_windows:
+            speech_ms = speech_duration_ms(start, end)
+            weights.append(max(speech_ms, int((end - start) * 0.6)))
 
-        if not sentence_data:
+        whisper_segments = []
+
+        for idx, (start, end) in enumerate(segment_windows):
+            remaining_segments = len(segment_windows) - idx
+
+            if not sentence_data:
+                break
+
+            if remaining_segments == 1:
+                picked = sentence_data
+                sentence_data = []
+            else:
+                remaining_weight = sum(weights[idx:]) or 1
+                target_words = max(1, round(total_words * weights[idx] / remaining_weight))
+
+                picked = []
+                picked_words = 0
+
+                while sentence_data:
+                    if len(sentence_data) <= (remaining_segments - 1) and picked:
+                        break
+
+                    sent, count = sentence_data[0]
+                    if picked and picked_words + count > target_words:
+                        break
+
+                    picked.append(sentence_data.pop(0))
+                    picked_words += count
+
+                if not picked:
+                    picked.append(sentence_data.pop(0))
+
+            text = " ".join(s for s, _ in picked).strip()
+            total_words -= sum(cnt for _, cnt in picked)
+
+            whisper_segments.append({
+                "id": len(whisper_segments),
+                "start": start / 1000,
+                "end": end / 1000,
+                "text": text,
+                "_duration_ms": end - start
+            })
+
+        return whisper_segments
+
+    # Итеративно объединяем, если текст не помещается в окно
+    safety_counter = 0
+    while True:
+        safety_counter += 1
+        whisper_segments = distribute_text(segments_ms)
+
+        violation_idx = None
+        for idx, seg in enumerate(whisper_segments[:-1]):
+            if estimate_tts_ms(seg["text"]) > seg["_duration_ms"]:
+                violation_idx = idx
+                break
+
+        if violation_idx is None or len(segments_ms) == 1 or safety_counter > 6:
             break
 
-        # Последний сегмент — кладём всё оставшееся
-        if remaining_segments == 1:
-            picked = sentence_data
-            sentence_data = []
-        else:
-            remaining_dur = sum(durations[idx:])
-            target = max(1, round(total_words * durations[idx] / remaining_dur))
+        # Расширяем окно, объединяя с соседним сегментом
+        segments_ms[violation_idx][1] = segments_ms[violation_idx + 1][1]
+        segments_ms.pop(violation_idx + 1)
 
-            picked = []
-            picked_words = 0
-
-            while sentence_data:
-                # Чтобы впереди остался хотя бы один sentence
-                if len(sentence_data) <= (remaining_segments - 1) and picked:
-                    break
-
-                sent, count = sentence_data[0]
-
-                # Не переполняем сегмент
-                if picked and picked_words + count > target:
-                    break
-
-                picked.append(sentence_data.pop(0))
-                picked_words += count
-
-            # safety fallback
-            if not picked:
-                picked.append(sentence_data.pop(0))
-
-        text = " ".join(s for s, _ in picked).strip()
-        total_words -= sum(cnt for _, cnt in picked)
-
-        whisper_segments.append({
-            "id": len(whisper_segments),
-            "start": start / 1000,
-            "end": end / 1000,
-            "text": text
-        })
+    # Убираем техническое поле
+    for seg in whisper_segments:
+        seg.pop("_duration_ms", None)
 
     return whisper_segments
 
