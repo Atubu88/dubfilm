@@ -219,8 +219,11 @@ def place_segments_on_timeline(segments: List[Segment], total_duration: float) -
         if seg.duration_ms <= 0:
             continue
 
-        # Генерируем TTS как есть — НИ ТРИММИНГА, НИ СЖАТИЯ, НИ УСКОРЕНИЯ
-        tts_audio = synthesize_text_to_audio(seg.text)
+        # 1. Генерируем сырой TTS
+        raw_tts = synthesize_text_to_audio(seg.text)
+
+        # 2. ВПИХИВАЕМ TTS В СЕГМЕНТ (ключевое!)
+        tts_audio = fit_tts_into_segment(raw_tts, seg.duration_ms)
 
         start_ms = int(seg.start * 1000)
 
@@ -230,10 +233,11 @@ def place_segments_on_timeline(segments: List[Segment], total_duration: float) -
             f"window={seg.duration_ms/1000:.2f}s"
         )
 
-        # Главное — просто накладываем TTS в своей Whisper-позиции
+        # 3. Накладываем уже идеально подогнанный TTS
         final_audio = final_audio.overlay(tts_audio, position=start_ms)
 
     return final_audio
+
 
 
 
