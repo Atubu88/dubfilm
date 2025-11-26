@@ -1,36 +1,58 @@
 import json
 import os
+import sys
+from typing import List, Dict
+
+import srt
 from openai import OpenAI
-from pipeline.constants import WHISPER_DIR, TRANSLATION_DIR
+
 from config import OPENAI_API_KEY
 from helpers.validators import assert_valid_translation
+from pipeline.constants import TRANSLATION_DIR, WHISPER_DIR
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 
+def load_srt_segments(srt_filename: str = "subtitles.srt") -> List[Dict]:
+    srt_path = os.path.join(WHISPER_DIR, srt_filename)
+    if not os.path.exists(srt_path):
+        raise FileNotFoundError(f"❌ SRT file not found → {srt_path}")
+
+    with open(srt_path, "r", encoding="utf-8") as f:
+        parsed = list(srt.parse(f.read()))
+
+    segments = []
+    for idx, entry in enumerate(parsed):
+        text = entry.content.replace("\n", " ").strip()
+        if not text:
+            continue
+
+        segments.append({
+            "id": idx,
+            "start": entry.start.total_seconds(),
+            "end": entry.end.total_seconds(),
+            "text": text,
+        })
+
+    if not segments:
+        raise RuntimeError("❌ Parsed SRT contains no text segments")
+
+    print(f"📖 Loaded {len(segments)} SRT segments for translation")
+    return segments
+
+
 def translate_segments(
-        whisper_json="transcript.json",
+        srt_filename="subtitles.srt",
         target_lang="en"  # например: "ru", "en", "fr"
 ):
     """
-    🔹 Загружает сегменты Whisper
+    🔹 Загружает сегменты из SRT (AssemblyAI)
     🔹 Отправляет GPT запрос на перевод
     🔹 Сохраняет новый JSON с 'src' + 'dst'
     🔹 Проверяет корректность
-
-    ⚠️ Сегментация строго сохраняется — модель получает JSON и обязана
-       вернуть JSON того же размера. Так мы исключаем потери сегментов,
-       которые раньше возникали при парсинге пронумерованных строк.
     """
 
-    whisper_path = os.path.join(WHISPER_DIR, whisper_json)
-
-    with open(whisper_path, "r", encoding="utf-8") as f:
-        whisper_data = json.load(f)
-
-    segments = whisper_data["segments"]
-
-    print(f"📖 Loaded {len(segments)} segments for translation")
+    segments = load_srt_segments(srt_filename)
 
     # 🧠 Отправляем JSON, чтобы исключить двусмысленности при парсинге
     payload = {
@@ -125,8 +147,9 @@ def translate_segments(
 
 
 if __name__ == "__main__":
+    lang = sys.argv[1] if len(sys.argv) > 1 else "ru"
     out = translate_segments(
-        whisper_json="transcript.json",
-        target_lang="ru"   # ⚠️ ТУТ ставь язык перевода
+        srt_filename="subtitles.srt",
+        target_lang=lang
     )
     print("✅ Translation saved to:", out)
