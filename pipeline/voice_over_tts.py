@@ -13,13 +13,11 @@ from openai import OpenAI
 from pydub import AudioSegment, effects
 
 from config import OPENAI_API_KEY
-from pipeline.constants import OUTPUT_DIR, TRANSLATION_DIR, WHISPER_DIR
-from pipeline.speech_onset import detect_speech_onset
+from pipeline.constants import OUTPUT_DIR, TRANSLATION_DIR
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 TRANSLATED_JSON = os.path.join(TRANSLATION_DIR, "translated.json")
-TRANSCRIPT_JSON = os.path.join(WHISPER_DIR, "transcript.json")
 MP3_OUTPUT = os.path.join(OUTPUT_DIR, "voice_over_tts.mp3")
 WAV_OUTPUT = os.path.join(OUTPUT_DIR, "voice_over_tts.wav")
 FINAL_AUDIO = os.path.join(OUTPUT_DIR, "final_audio.wav")
@@ -80,13 +78,6 @@ def load_translated_segments() -> List[Segment]:
 
 
 def load_original_duration(segments: List[Segment]) -> float:
-    if os.path.exists(TRANSCRIPT_JSON):
-        with open(TRANSCRIPT_JSON, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-        duration = meta.get("duration")
-        if isinstance(duration, (int, float)) and duration > 0:
-            return float(duration)
-
     return max((seg.end for seg in segments), default=0.0)
 
 
@@ -280,24 +271,8 @@ def generate_voice_over_track():
     if total_duration <= 0:
         raise VoiceOverError("❌ Unable to determine original duration")
 
-    # --- Speech onset ---
-    wav_path = os.path.join("2_audio", "input.wav")
-    real_start = detect_speech_onset(wav_path)
-
-    whisper_start = segments[0].start
-    offset = real_start - whisper_start
-
-    print(f"🟦 Real speech starts at: {real_start:.2f}s")
-    print(f"🟦 Whisper thinks start: {whisper_start:.2f}s")
-    print(f"🟦 Applying global offset: {offset:.2f}s")
-
-    # --- Apply offset ---
-    for seg in segments:
-        seg.start += offset
-        seg.end += offset
-
     # --- Generate voice-over timeline ---
-    final_audio = place_segments_on_timeline(segments, total_duration + offset)
+    final_audio = place_segments_on_timeline(segments, total_duration)
 
     export_audio_track(final_audio)
     sanity_check_wav(WAV_OUTPUT, min_duration=max(0.5, total_duration - 0.5))
