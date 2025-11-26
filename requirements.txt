@@ -6,3 +6,5 @@ ffmpeg-python
 pydub
 requests
 pytube
+assemblyai
+srt

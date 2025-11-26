@@ -1,10 +1,12 @@
-import os
 import json
+import os
 import subprocess
+
 from openai import OpenAI
+
 from config import OPENAI_API_KEY
-from pipeline.constants import CHUNKS_DIR, OUTPUT_DIR
 from helpers.validators import assert_valid_tts_chunk
+from pipeline.constants import CHUNKS_DIR, OUTPUT_DIR
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -19,6 +21,8 @@ def generate_tts():
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+    manifest = []
+
     for f in files:
         path = os.path.join(CHUNKS_DIR, f)
 
@@ -27,11 +31,17 @@ def generate_tts():
 
         text = data["text"].strip()
         idx = f.replace("chunk_", "").replace(".json", "")
+        start = data.get("start")
+        end = data.get("end")
 
         mp3_path = os.path.join(OUTPUT_DIR, f"tts_{idx}.mp3")
         wav_path = os.path.join(OUTPUT_DIR, f"tts_{idx}.wav")
 
-        print(f"🎤 Generating TTS for chunk {idx}…")
+        print(
+            f"🎤 Generating TTS for chunk {idx} (start={start:.3f}s, end={end:.3f}s)…"
+            if start is not None and end is not None
+            else f"🎤 Generating TTS for chunk {idx}…"
+        )
 
         # 1) Получаем MP3/ACC от OpenAI
         response = client.audio.speech.create(
@@ -64,6 +74,17 @@ def generate_tts():
         print(f"💾 Saved → {wav_path}")
         print(f"🟢 TTS OK for chunk {idx}")
 
+        manifest.append({
+            "file": os.path.basename(wav_path),
+            "start": start,
+            "end": end,
+        })
+
+    manifest_path = os.path.join(OUTPUT_DIR, "tts_manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as mf:
+        json.dump(manifest, mf, ensure_ascii=False, indent=2)
+
+    print(f"🗂 Manifest saved → {manifest_path}")
     print("🎉 ALL TTS DONE")
 
 if __name__ == "__main__":

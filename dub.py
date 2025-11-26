@@ -89,7 +89,7 @@ def run_common_steps(input_video: str, lang: str):
     copy_input_video(input_video)
 
     run("python -m pipeline.extract_audio 1_input/input.mp4")
-    run("python -m pipeline.whisper_transcribe")
+    run("python -m pipeline.assemblyai_transcribe")
     run(f"python -m pipeline.translate_chunks {lang}")
 
 
