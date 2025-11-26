@@ -1,26 +1,30 @@
 import json
 import os
-from pipeline.constants import TRANSLATION_DIR, CHUNKS_DIR
+from typing import List, Dict
+
 from helpers.validators import assert_valid_chunks
+from pipeline.constants import TRANSLATION_DIR, CHUNKS_DIR
 
 MAX_CHARS = 260          # безопасный лимит для TTS
-MAX_DURATION = 15        # сек. защитный порог по длительности (≈ 2 предложения)
 TRANSLATED_JSON = f"{TRANSLATION_DIR}/translated.json"
 
-def load_segments():
+
+def load_segments() -> List[Dict]:
     with open(TRANSLATED_JSON, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def save_chunk(idx, start, end, text):
+def save_chunk(idx, start, end, text, ids=None):
     chunk = {
         "start": round(start, 3),
         "end": round(end, 3),
-        "text": text.strip()
+        "text": text.strip(),
     }
+    if ids:
+        chunk["segment_ids"] = ids
 
     path_json = os.path.join(CHUNKS_DIR, f"chunk_{idx:03d}.json")
-    path_txt  = os.path.join(CHUNKS_DIR, f"chunk_{idx:03d}.txt")
+    path_txt = os.path.join(CHUNKS_DIR, f"chunk_{idx:03d}.txt")
 
     with open(path_json, "w", encoding="utf-8") as f:
         json.dump(chunk, f, ensure_ascii=False, indent=2)
@@ -37,31 +41,44 @@ def split_into_chunks():
         os.remove(os.path.join(CHUNKS_DIR, f))
 
     segments = load_segments()
+    if not segments:
+        raise RuntimeError("❌ No translated segments to split")
 
     chunks = []
     current_text = ""
-    current_start = segments[0]["start"]
-    current_end = segments[0]["end"]
+    current_start = None
+    current_end = None
+    current_ids: List[int] = []
 
     for seg in segments:
-        text = seg["dst"]
-        duration = seg["end"] - current_start
+        seg_text = (seg.get("dst") or "").strip()
+        if not seg_text:
+            continue
 
-        if (
-            len(current_text) + len(text) > MAX_CHARS
-            or duration > MAX_DURATION
-        ):
-            chunks.append((current_start, current_end, current_text))
-            current_text = ""
+        proposed_text = (current_text + " " + seg_text).strip() if current_text else seg_text
+
+        if current_text and len(proposed_text) > MAX_CHARS:
+            chunks.append((current_start, current_end, current_text, current_ids.copy()))
+            current_text = seg_text
             current_start = seg["start"]
+            current_end = seg["end"]
+            current_ids = [seg.get("id")]
+            continue
 
-        current_text += text + " "
+        if not current_text:
+            current_start = seg["start"]
+            current_ids = [seg.get("id")]
+        else:
+            current_ids.append(seg.get("id"))
+
+        current_text = proposed_text
         current_end = seg["end"]
 
-    chunks.append((current_start, current_end, current_text))
+    if current_text:
+        chunks.append((current_start, current_end, current_text, current_ids))
 
-    for i, (start, end, text) in enumerate(chunks, 1):
-        save_chunk(i, start, end, text)
+    for i, (start, end, text, ids) in enumerate(chunks, 1):
+        save_chunk(i, start, end, text, ids)
 
     print(f"📦 Created {len(chunks)} chunks")
 

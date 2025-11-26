@@ -1,7 +1,10 @@
 import os
 import json
+import json
+import os
 import subprocess
 import wave
+
 from pipeline.constants import OUTPUT_DIR, CHUNKS_DIR
 
 
@@ -30,7 +33,7 @@ def stretch_audio():
         tts_dur = get_wav_duration(wav_path)
 
         print(f"\n🔍 Chunk {idx+1}:")
-        print(f"   Whisper target: {original_dur:.2f}s")
+        print(f"   SRT target: {original_dur:.2f}s")
         print(f"   TTS duration:    {tts_dur:.2f}s")
 
         # NEW RULE:
