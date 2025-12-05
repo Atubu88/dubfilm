@@ -1,15 +1,17 @@
+from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
 
-from openai import AsyncOpenAI
 
-from config import OPENAI_API_KEY
+class BaseAIProvider(ABC):
+    @abstractmethod
+    async def transcribe(self, file_path: Path) -> dict[str, Any]:
+        """Transcribe audio file to text."""
 
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    @abstractmethod
+    async def translate(self, text: str, source_language: str, target_language: str) -> str:
+        """Translate text from source_language to target_language."""
 
-
-async def ask_ai(kind: str, **kwargs: Any) -> Any:
-    if kind == "transcription":
-        return await client.audio.transcriptions.create(**kwargs)
-    if kind == "chat":
-        return await client.chat.completions.create(**kwargs)
-    raise ValueError(f"Unsupported AI operation: {kind}")
+    @abstractmethod
+    async def summarize(self, original_text: str, translated_text: str, target_language: str) -> str:
+        """Summarize original_text using translated_text context in target_language."""
