@@ -59,4 +59,12 @@ async def prepare_audio_file(bot: Bot, media: Message) -> Path:
     file_id, suffix = _extract_file_data(media)
     raw_path = TEMP_DIR / f"{uuid4()}{suffix}"
     downloaded_path = await _download_file(bot, file_id, raw_path)
-    return await _convert_to_wav(downloaded_path)
+    try:
+        wav_path = await _convert_to_wav(downloaded_path)
+    finally:
+        try:
+            downloaded_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    return wav_path

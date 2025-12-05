@@ -23,7 +23,7 @@ async def main():
     dp = Dispatcher()
 
     ai_service = setup_ai_service()
-    dp["ai_service"] = ai_service
+    bot["ai_service"] = ai_service
 
     dp.include_router(start_router)
     dp.include_router(media_router)
