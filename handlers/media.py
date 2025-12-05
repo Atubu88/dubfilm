@@ -27,8 +27,17 @@ class TranscriptionResult:
 
 
 async def _get_ai_service(message: Message) -> AIService:
-    ai_service: AIService = message.bot.dispatcher["ai_service"]
+    ai_service: AIService = message.bot["ai_service"]
     return ai_service
+
+
+async def _send_long_message(message: Message, text: str, chunk_size: int = 3900) -> None:
+    if len(text) <= chunk_size:
+        await message.answer(text)
+        return
+
+    for start in range(0, len(text), chunk_size):
+        await message.answer(text[start : start + chunk_size])
 
 
 async def _request_translation_language(message: Message, transcription: TranscriptionResult, state: FSMContext) -> None:
@@ -60,7 +69,14 @@ async def handle_media(message: Message, state: FSMContext) -> None:
     await message.answer("Скачиваю и обрабатываю файл, секунду...")
     audio_path = await prepare_audio_file(bot=message.bot, media=message)
 
-    transcription_data = await run_transcription(audio_path=audio_path, ai_service=ai_service)
+    try:
+        transcription_data = await run_transcription(audio_path=audio_path, ai_service=ai_service)
+    finally:
+        try:
+            audio_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
     transcription = TranscriptionResult(
         text=transcription_data["text"],
         language=transcription_data["language"],
@@ -111,5 +127,5 @@ async def handle_translation_request(message: Message, state: FSMContext) -> Non
         summary=summary_text,
     )
 
-    await message.answer(response)
+    await _send_long_message(message, response)
     await state.clear()
