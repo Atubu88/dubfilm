@@ -14,7 +14,7 @@ from config import DEFAULT_TRANSLATION_CHOICES
 from pipelines.summary import run_summary
 from pipelines.transcribe import run_transcription
 from pipelines.translate import run_translation
-from services.audio import prepare_audio_file
+from services.audio import MAX_FILE_SIZE_BYTES, get_media_size, prepare_audio_file
 from services.downloader import download_audio_from_url, is_supported_media_url
 
 router = Router()
@@ -89,6 +89,13 @@ async def _process_audio(
         except OSError:
             pass
 
+        parent = audio_path.parent
+        if parent.name.startswith("download_"):
+            try:
+                parent.rmdir()
+            except OSError:
+                pass
+
     transcription = TranscriptionResult(
         text=transcription_data["text"],
         language=transcription_data["language"],
@@ -99,34 +106,56 @@ async def _process_audio(
 
 @router.message(F.audio | F.voice | F.video | F.video_note | F.document)
 async def handle_media(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("processing"):
+        await message.answer("Я уже обрабатываю предыдущий запрос, подожди, пожалуйста.")
+        return
+
     if message.document and not _is_supported_document(message):
         await message.answer("Поддерживаются только аудио или видео документы.")
         return
 
+    file_size = get_media_size(message)
+    if file_size is not None and file_size > MAX_FILE_SIZE_BYTES:
+        await message.answer("Файл слишком большой. Максимальный размер — 20 МБ.")
+        return
+
     ai_service = await _get_ai_service(message)
 
-    await message.answer("Скачиваю и обрабатываю файл, секунду...")
-    audio_path = await prepare_audio_file(bot=message.bot, media=message)
-    await _process_audio(message, state, ai_service, audio_path)
+    await state.update_data(processing=True)
+    try:
+        await message.answer("Скачиваю и обрабатываю файл, секунду...")
+        audio_path = await prepare_audio_file(bot=message.bot, media=message)
+        await _process_audio(message, state, ai_service, audio_path)
+    except Exception:
+        logger.exception("Failed to process uploaded media from user %s", message.from_user.id if message.from_user else "unknown")
+        await message.answer("Не удалось скачать или обработать файл. Проверь его и попробуй снова чуть позже.")
+    finally:
+        await state.update_data(processing=False)
 
 
 @router.message(F.text.regexp(URL_PATTERN))
 async def handle_media_links(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("processing"):
+        return
+
     url = _extract_supported_url(message.text or "")
     if not url:
         return
 
     ai_service = await _get_ai_service(message)
 
-    await message.answer("Скачиваю медиа по ссылке, секунду...")
+    await state.update_data(processing=True)
     try:
+        await message.answer("Скачиваю медиа по ссылке, секунду...")
         audio_path = await download_audio_from_url(url)
+        await _process_audio(message, state, ai_service, audio_path)
     except Exception:
         logger.exception("Failed to download media from %s", url)
         await message.answer("Не удалось скачать или обработать ссылку. Проверь её и попробуй снова.")
-        return
-
-    await _process_audio(message, state, ai_service, audio_path)
+    finally:
+        await state.update_data(processing=False)
 
 
 @router.message(TranslationState.waiting_for_language)
