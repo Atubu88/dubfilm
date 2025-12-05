@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 
 def setup_ai_service() -> AIService:
-    provider = AIProvider(chat_model=OPENAI_CHAT_MODEL, whisper_model=OPENAI_WHISPER_MODEL)
+    provider = AIProvider(
+        chat_model=OPENAI_CHAT_MODEL,
+        whisper_model=OPENAI_WHISPER_MODEL
+    )
     return AIService(provider=provider)
 
 
@@ -23,7 +26,8 @@ async def main():
     dp = Dispatcher()
 
     ai_service = setup_ai_service()
-    bot["ai_service"] = ai_service
+    # ✅ Правильный способ хранения сервиса в Aiogram 3
+    bot.ai_service = ai_service
 
     dp.include_router(start_router)
     dp.include_router(media_router)
