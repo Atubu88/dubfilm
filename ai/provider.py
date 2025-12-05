@@ -1,10 +1,16 @@
 from pathlib import Path
-from typing import Any
-
+from typing import Any, Dict
+import asyncio
+import aiohttp
 from openai import AsyncOpenAI
 
 from ai.base import BaseAIProvider
-from config import OPENAI_API_KEY
+from config import (
+    OPENAI_API_KEY,
+    OPENAI_WHISPER_MODEL,
+    ASSEMBLYAI_API_KEY,
+    TRANSCRIBE_PROVIDER,
+)
 
 
 class AIProvider(BaseAIProvider):
@@ -13,19 +19,96 @@ class AIProvider(BaseAIProvider):
         self.whisper_model = whisper_model
         self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-    async def transcribe(self, file_path: Path) -> dict[str, Any]:
+    # ============================================================
+    # ✅ ЕДИНАЯ ТОЧКА ТРАНСКРИБАЦИИ (Whisper или AssemblyAI)
+    # ============================================================
+    async def transcribe(self, file_path: Path) -> Dict[str, Any]:
+        if TRANSCRIBE_PROVIDER == "assemblyai":
+            return await self._transcribe_with_assemblyai(file_path)
+
+        # 🔥 ПО УМОЛЧАНИЮ — WHISPER
+        return await self._transcribe_with_whisper(file_path)
+
+    # ============================================================
+    # ✅ WHISPER
+    # ============================================================
+    async def _transcribe_with_whisper(self, file_path: Path) -> Dict[str, Any]:
         with open(file_path, "rb") as audio_file:
             response = await self.client.audio.transcriptions.create(
-                model=self.whisper_model,
+                model=self.whisper_model,          # whisper-1
                 file=audio_file,
                 response_format="verbose_json",
             )
-        return {"text": response.text, "language": response.language}
 
+        return {
+            "text": response.text,
+            "language": response.language,
+        }
+
+    # ============================================================
+    # ✅ ASSEMBLYAI
+    # ============================================================
+    async def _transcribe_with_assemblyai(self, file_path: Path) -> Dict[str, Any]:
+        headers = {
+            "authorization": ASSEMBLYAI_API_KEY,
+            "content-type": "application/json",
+        }
+
+        async with aiohttp.ClientSession(headers=headers) as session:
+            # 1️⃣ Загружаем файл
+            async with session.post(
+                "https://api.assemblyai.com/v2/upload",
+                data=file_path.read_bytes(),
+            ) as upload_resp:
+                upload_data = await upload_resp.json()
+                upload_url = upload_data["upload_url"]
+
+            # 2️⃣ Запускаем транскрипцию
+            transcript_payload = {
+                "audio_url": upload_url,
+                "language_detection": True,
+            }
+
+            async with session.post(
+                "https://api.assemblyai.com/v2/transcript",
+                json=transcript_payload,
+            ) as transcript_resp:
+                transcript_data = await transcript_resp.json()
+                transcript_id = transcript_data["id"]
+
+            # 3️⃣ Ожидаем результат
+            while True:
+                async with session.get(
+                    f"https://api.assemblyai.com/v2/transcript/{transcript_id}"
+                ) as polling_resp:
+                    result = await polling_resp.json()
+
+                    status = result["status"]
+
+                    if status == "completed":
+                        return {
+                            "text": result["text"],
+                            "language": result.get("language_code", "unknown"),
+                        }
+
+                    if status == "error":
+                        raise RuntimeError(f"AssemblyAI error: {result['error']}")
+
+                await asyncio.sleep(2)
+
+    # ============================================================
+    # ✅ ПЕРЕВОД (ЖЁСТКИЙ)
+    # ============================================================
     async def translate(self, text: str, source_language: str, target_language: str) -> str:
         prompt = (
-            "You are a translator. Translate the user message from {src} to {tgt}. "
-            "Return translation only without quotes or commentary."
+            "You are a professional translator. "
+            "You MUST translate the text STRICTLY into {tgt} language. "
+            "The final answer MUST contain ONLY {tgt} language. "
+            "DO NOT leave any words or sentences in {src}. "
+            "If the text is a dialogue, format it as a dialogue using dashes. "
+            "Preserve the emotional tone and religious expressions. "
+            "Avoid word-for-word translation. "
+            "Return ONLY the translated text without comments."
         ).format(src=source_language, tgt=target_language)
 
         response = await self.client.chat.completions.create(
@@ -35,12 +118,39 @@ class AIProvider(BaseAIProvider):
                 {"role": "user", "content": text},
             ],
         )
-        return (response.choices[0].message.content or "").strip()
 
+        result = (response.choices[0].message.content or "").strip()
+
+        # ✅ ПОВТОР ЕСЛИ ЯЗЫК НЕ СМЕНИЛСЯ
+        if source_language.lower() in result.lower():
+            retry_prompt = (
+                "Translate the following text STRICTLY into {tgt} language only. "
+                "DO NOT keep any {src} words. "
+                "Return translation only.\n\n{text}"
+            ).format(src=source_language, tgt=target_language, text=text)
+
+            retry_response = await self.client.chat.completions.create(
+                model=self.chat_model,
+                messages=[
+                    {"role": "system", "content": retry_prompt},
+                    {"role": "user", "content": text},
+                ],
+            )
+
+            result = (retry_response.choices[0].message.content or "").strip()
+
+        return result
+
+    # ============================================================
+    # ✅ СМЫСЛОВАЯ ВЫЖИМКА
+    # ============================================================
     async def summarize(self, original_text: str, translated_text: str, target_language: str) -> str:
         prompt = (
-            "You are a helpful assistant. Summarize the original text concisely in {lang}. "
-            "Use up to 3 sentences. Use the translation for context if needed."
+            "You are a skilled editor. "
+            "Write a short, meaningful summary in {lang}. "
+            "Explain the MAIN IDEA and MORAL of the text in 2–3 sentences. "
+            "Do NOT retell the dialogue literally. "
+            "Focus on the message and lesson."
         ).format(lang=target_language)
 
         response = await self.client.chat.completions.create(
@@ -48,9 +158,13 @@ class AIProvider(BaseAIProvider):
             messages=[
                 {"role": "system", "content": prompt},
                 {
-                    "role": "assistant",
-                    "content": "Original text:\n" + original_text + "\n\nTranslation:\n" + translated_text,
+                    "role": "user",
+                    "content": (
+                        "Original text:\n" + original_text +
+                        "\n\nTranslation:\n" + translated_text
+                    ),
                 },
             ],
         )
+
         return (response.choices[0].message.content or "").strip()

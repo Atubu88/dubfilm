@@ -26,8 +26,9 @@ class TranscriptionResult:
     language: str
 
 
+# ✅ ИСПРАВЛЕНО: доступ через атрибут, а не через []
 async def _get_ai_service(message: Message) -> AIService:
-    ai_service: AIService = message.bot["ai_service"]
+    ai_service: AIService = message.bot.ai_service
     return ai_service
 
 
@@ -37,7 +38,7 @@ async def _send_long_message(message: Message, text: str, chunk_size: int = 3900
         return
 
     for start in range(0, len(text), chunk_size):
-        await message.answer(text[start : start + chunk_size])
+        await message.answer(text[start:start + chunk_size])
 
 
 async def _request_translation_language(message: Message, transcription: TranscriptionResult, state: FSMContext) -> None:
