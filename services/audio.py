@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
@@ -7,6 +8,9 @@ from aiogram import Bot
 from aiogram.types import Message
 
 from config import TEMP_DIR
+
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_file_data(message: Message) -> tuple[str, Optional[str]]:
@@ -31,7 +35,7 @@ async def _download_file(bot: Bot, file_id: str, destination: Path) -> Path:
     return destination
 
 
-async def _convert_to_wav(source_path: Path) -> Path:
+async def convert_to_wav(source_path: Path) -> Path:
     target_path = source_path.with_suffix(".wav")
     process = await asyncio.create_subprocess_exec(
         "ffmpeg",
@@ -51,7 +55,9 @@ async def _convert_to_wav(source_path: Path) -> Path:
     )
     stdout, stderr = await process.communicate()
     if process.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed: {stderr.decode()}")
+        error_output = stderr.decode() or stdout.decode()
+        logger.error("ffmpeg failed while converting %s: %s", source_path, error_output)
+        raise RuntimeError(f"ffmpeg failed: {error_output}")
     return target_path
 
 
@@ -60,7 +66,7 @@ async def prepare_audio_file(bot: Bot, media: Message) -> Path:
     raw_path = TEMP_DIR / f"{uuid4()}{suffix}"
     downloaded_path = await _download_file(bot, file_id, raw_path)
     try:
-        wav_path = await _convert_to_wav(downloaded_path)
+        wav_path = await convert_to_wav(downloaded_path)
     finally:
         try:
             downloaded_path.unlink(missing_ok=True)
