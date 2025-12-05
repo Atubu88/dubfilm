@@ -7,7 +7,7 @@ from typing import Any
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from ai.service import AIService
 from config import DEFAULT_TRANSLATION_CHOICES
@@ -33,6 +33,13 @@ class TranscriptionResult:
     language: str
 
 
+LANG_MAP = {
+    "English": "english",
+    "Arabic": "arabic",
+    "Uzbek": "uzbek",
+}
+
+
 # ✅ ИСПРАВЛЕНО: доступ через атрибут, а не через []
 async def _get_ai_service(message: Message) -> AIService:
     ai_service: AIService = message.bot.ai_service
@@ -52,10 +59,24 @@ async def _request_translation_language(message: Message, transcription: Transcr
     options = ", ".join(DEFAULT_TRANSLATION_CHOICES)
     await state.update_data(text=transcription.text, language=transcription.language)
     await state.set_state(TranslationState.waiting_for_language)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=choice,
+                    callback_data=f"translation:{LANG_MAP[choice]}",
+                )
+            ]
+            for choice in DEFAULT_TRANSLATION_CHOICES
+        ]
+    )
     await message.answer(
-        "Готово! Я определил язык: {lang}. На какой язык перевести?\nВарианты: {options}\n"
-        "Можно выбрать любой другой — просто напиши название языка."
-        .format(lang=transcription.language.title(), options=options)
+        (
+            "Готово! Я определил язык: {lang}. На какой язык перевести?\n"
+            "Варианты: {options}\n"
+            "Выбирай язык перевода кнопкой ниже."
+        ).format(lang=transcription.language.title(), options=options),
+        reply_markup=keyboard,
     )
 
 
@@ -102,6 +123,52 @@ async def _process_audio(
     )
 
     await _request_translation_language(message, transcription, state)
+
+
+async def _translate_and_summarize(
+    message: Message, state: FSMContext, target_language: str
+) -> None:
+    ai_service = await _get_ai_service(message)
+    data: dict[str, Any] = await state.get_data()
+
+    original_text = data.get("text", "")
+    detected_language = data.get("language", "unknown")
+
+    if not original_text:
+        await state.clear()
+        await message.answer("Не нашёл текст для перевода, пришли аудио/видео заново.")
+        return
+
+    await message.answer("Перевожу и готовлю краткое резюме...")
+
+    translation = await run_translation(
+        text=original_text,
+        source_language=detected_language,
+        target_language=target_language,
+        ai_service=ai_service,
+    )
+
+    summary_text = await run_summary(
+        original_text=original_text,
+        translated_text=translation,
+        target_language=target_language,
+        ai_service=ai_service,
+    )
+
+    response = (
+        "🗣 Оригинал ({src}):\n{orig}\n\n"
+        "🌍 Перевод ({target}):\n{translated}\n\n"
+        "✍️ Кратко: {summary}"
+    ).format(
+        src=detected_language.title(),
+        orig=original_text,
+        target=target_language.title(),
+        translated=translation,
+        summary=summary_text,
+    )
+
+    await _send_long_message(message, response)
+    await state.clear()
 
 
 @router.message(F.audio | F.voice | F.video | F.video_note | F.document)
@@ -160,45 +227,12 @@ async def handle_media_links(message: Message, state: FSMContext) -> None:
 
 @router.message(TranslationState.waiting_for_language)
 async def handle_translation_request(message: Message, state: FSMContext) -> None:
-    ai_service = await _get_ai_service(message)
-    data: dict[str, Any] = await state.get_data()
+    await message.answer("Пожалуйста, выбери язык кнопкой ниже ⬇️")
 
-    target_language = message.text.strip()
-    original_text = data.get("text", "")
-    detected_language = data.get("language", "unknown")
 
-    if not original_text:
-        await state.clear()
-        await message.answer("Не нашёл текст для перевода, пришли аудио/видео заново.")
-        return
-
-    await message.answer("Перевожу и готовлю краткое резюме...")
-
-    translation = await run_translation(
-        text=original_text,
-        source_language=detected_language,
-        target_language=target_language,
-        ai_service=ai_service,
-    )
-
-    summary_text = await run_summary(
-        original_text=original_text,
-        translated_text=translation,
-        target_language=target_language,
-        ai_service=ai_service,
-    )
-
-    response = (
-        "🗣 Оригинал ({src}):\n{orig}\n\n"
-        "🌍 Перевод ({target}):\n{translated}\n\n"
-        "✍️ Кратко: {summary}"
-    ).format(
-        src=detected_language.title(),
-        orig=original_text,
-        target=target_language.title(),
-        translated=translation,
-        summary=summary_text,
-    )
-
-    await _send_long_message(message, response)
-    await state.clear()
+@router.callback_query(TranslationState.waiting_for_language, F.data.startswith("translation:"))
+async def handle_translation_button(callback: CallbackQuery, state: FSMContext) -> None:
+    target_language = callback.data.split(":", 1)[1].title()
+    await callback.answer()
+    if callback.message:
+        await _translate_and_summarize(callback.message, state, target_language)

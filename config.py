@@ -61,8 +61,6 @@ TEMP_DIR.mkdir(exist_ok=True)
 # =========================
 DEFAULT_TRANSLATION_CHOICES = [
     "English",
-    "Spanish",
-    "German",
-    "French",
-    "Russian",
+    "Arabic",
+    "Uzbek",
 ]
