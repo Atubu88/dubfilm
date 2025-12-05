@@ -110,7 +110,7 @@ async def handle_media(message: Message, state: FSMContext) -> None:
     await _process_audio(message, state, ai_service, audio_path)
 
 
-@router.message(F.text)
+@router.message(F.text.regexp(URL_PATTERN))
 async def handle_media_links(message: Message, state: FSMContext) -> None:
     url = _extract_supported_url(message.text or "")
     if not url:
