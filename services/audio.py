@@ -12,19 +12,22 @@ from config import TEMP_DIR
 
 logger = logging.getLogger(__name__)
 
+MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 
-def _extract_file_data(message: Message) -> tuple[str, Optional[str]]:
+
+def _extract_file_data(message: Message) -> tuple[str, Optional[str], Optional[int]]:
     if message.audio:
-        return message.audio.file_id, Path(message.audio.file_name or "audio").suffix or ".mp3"
+        suffix = Path(message.audio.file_name or "audio").suffix or ".mp3"
+        return message.audio.file_id, suffix, message.audio.file_size
     if message.voice:
-        return message.voice.file_id, ".ogg"
+        return message.voice.file_id, ".ogg", message.voice.file_size
     if message.video:
-        return message.video.file_id, ".mp4"
+        return message.video.file_id, ".mp4", message.video.file_size
     if message.video_note:
-        return message.video_note.file_id, ".mp4"
+        return message.video_note.file_id, ".mp4", message.video_note.file_size
     if message.document:
         suffix = Path(message.document.file_name or "file").suffix
-        return message.document.file_id, suffix or ".dat"
+        return message.document.file_id, suffix or ".dat", message.document.file_size
     raise ValueError("Unsupported media type")
 
 
@@ -36,7 +39,7 @@ async def _download_file(bot: Bot, file_id: str, destination: Path) -> Path:
 
 
 async def convert_to_wav(source_path: Path) -> Path:
-    target_path = source_path.with_suffix(".wav")
+    target_path = source_path.with_name(f"{source_path.stem}_conv.wav")
     process = await asyncio.create_subprocess_exec(
         "ffmpeg",
         "-y",
@@ -62,7 +65,10 @@ async def convert_to_wav(source_path: Path) -> Path:
 
 
 async def prepare_audio_file(bot: Bot, media: Message) -> Path:
-    file_id, suffix = _extract_file_data(media)
+    file_id, suffix, file_size = _extract_file_data(media)
+    if file_size is not None and file_size > MAX_FILE_SIZE_BYTES:
+        raise ValueError("File exceeds maximum allowed size")
+
     raw_path = TEMP_DIR / f"{uuid4()}{suffix}"
     downloaded_path = await _download_file(bot, file_id, raw_path)
     try:
@@ -74,3 +80,8 @@ async def prepare_audio_file(bot: Bot, media: Message) -> Path:
             pass
 
     return wav_path
+
+
+def get_media_size(media: Message) -> Optional[int]:
+    _, _, file_size = _extract_file_data(media)
+    return file_size

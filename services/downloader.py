@@ -19,6 +19,8 @@ SUPPORTED_DOMAINS = (
     "fb.watch",
 )
 
+DOWNLOAD_TIMEOUT = 120
+
 
 def is_supported_media_url(url: str) -> bool:
     parsed = urlparse(url)
@@ -26,11 +28,17 @@ def is_supported_media_url(url: str) -> bool:
     return any(domain in hostname for domain in SUPPORTED_DOMAINS)
 
 
-async def _run_subprocess(*cmd: str) -> tuple[str, str, int]:
+async def _run_subprocess(*cmd: str, timeout: float | None = None) -> tuple[str, str, int]:
     process = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
-    stdout, stderr = await process.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.error("Command %s timed out after %.0f seconds", cmd[0], timeout or 0)
+        process.kill()
+        stdout, stderr = await process.communicate()
+        raise TimeoutError(f"{cmd[0]} timed out after {timeout} seconds")
     return stdout.decode(), stderr.decode(), process.returncode
 
 
@@ -46,6 +54,7 @@ async def _download_media(url: str) -> Path:
         "-o",
         str(output_template),
         url,
+        timeout=DOWNLOAD_TIMEOUT,
     )
 
     if returncode != 0:
@@ -62,11 +71,8 @@ async def _download_media(url: str) -> Path:
 
 async def download_audio_from_url(url: str) -> Path:
     media_path = await _download_media(url)
-    download_dir = media_path.parent
     try:
         wav_path = await convert_to_wav(media_path)
-        final_path = TEMP_DIR / f"{uuid4()}.wav"
-        wav_path.rename(final_path)
     finally:
         try:
             media_path.unlink(missing_ok=True)
@@ -74,10 +80,4 @@ async def download_audio_from_url(url: str) -> Path:
             # Directory may not be empty or already removed
             pass
 
-        try:
-            download_dir.rmdir()
-        except OSError:
-            # Directory may contain the converted file or be already removed
-            pass
-
-    return final_path
+    return wav_path
