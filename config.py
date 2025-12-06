@@ -63,4 +63,5 @@ DEFAULT_TRANSLATION_CHOICES = [
     "English",
     "Arabic",
     "Uzbek",
+    "Russian",
 ]
