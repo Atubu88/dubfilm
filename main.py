@@ -8,6 +8,7 @@ from ai.provider import AIProvider
 from config import BOT_TOKEN, OPENAI_CHAT_MODEL, OPENAI_WHISPER_MODEL
 from handlers.media import router as media_router
 from handlers.start import router as start_router
+from handlers.subtitles import router as subtitles_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ async def main():
 
     dp.include_router(start_router)
     dp.include_router(media_router)
+    dp.include_router(subtitles_router)
 
     logger.info("🤖 Bot started")
     await dp.start_polling(bot)
