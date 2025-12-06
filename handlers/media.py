@@ -41,7 +41,6 @@ LANG_MAP = {
 }
 
 
-# ✅ ИСПРАВЛЕНО: доступ через атрибут, а не через []
 async def _get_ai_service(message: Message) -> AIService:
     ai_service: AIService = message.bot.ai_service
     return ai_service
@@ -156,16 +155,19 @@ async def _translate_and_summarize(
         ai_service=ai_service,
     )
 
+    # ✅ ИЗМЕНЁН ТОЛЬКО ФОРМАТ СООБЩЕНИЯ
     response = (
+        "📝 Суть видео:\n\n"
+        "{summary}\n\n"
+        "━━━━━━━━━━━━━━\n"
         "🗣 Оригинал ({src}):\n{orig}\n\n"
-        "🌍 Перевод ({target}):\n{translated}\n\n"
-        "✍️ Кратко: {summary}"
+        "🌍 Перевод ({target}):\n{translated}"
     ).format(
+        summary=summary_text,
         src=detected_language.title(),
         orig=original_text,
         target=target_language.title(),
         translated=translation,
-        summary=summary_text,
     )
 
     await _send_long_message(message, response)
@@ -196,7 +198,10 @@ async def handle_media(message: Message, state: FSMContext) -> None:
         audio_path = await prepare_audio_file(bot=message.bot, media=message)
         await _process_audio(message, state, ai_service, audio_path)
     except Exception:
-        logger.exception("Failed to process uploaded media from user %s", message.from_user.id if message.from_user else "unknown")
+        logger.exception(
+            "Failed to process uploaded media from user %s",
+            message.from_user.id if message.from_user else "unknown"
+        )
         await message.answer("Не удалось скачать или обработать файл. Проверь его и попробуй снова чуть позже.")
     finally:
         await state.update_data(processing=False)
