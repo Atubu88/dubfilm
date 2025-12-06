@@ -110,33 +110,50 @@ async def start_subtitles(message: Message, state: FSMContext) -> None:
 
 @router.message(SubtitleState.waiting_for_video, F.text)
 async def handle_video_link(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("processing"):
+        await message.answer("Я уже обрабатываю предыдущий запрос, подожди чуть-чуть.")
+        return
+
     url = _extract_supported_url(message.text or "")
     if not url:
         return
 
+    await state.update_data(processing=True)
     await message.answer("Скачиваю видео по ссылке, подожди немного...")
     try:
         video_path = await download_video_from_url(url)
     except Exception:
         logger.exception("Failed to download video for subtitles from %s", url)
         await message.answer("Не удалось скачать видео по ссылке. Попробуй другое или позже.")
+        await state.update_data(processing=False)
         return
 
+    await state.update_data(processing=False)
     await _ask_language_choice(message, state, video_path)
 
 
 @router.message(SubtitleState.waiting_for_video, F.video | F.document)
 async def handle_video_upload(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("processing"):
+        await message.answer("Я уже обрабатываю предыдущий запрос, подожди чуть-чуть.")
+        return
+
+    await state.update_data(processing=True)
     try:
         video_path = await _prepare_video_from_message(message)
     except ValueError as exc:
         await message.answer(str(exc))
+        await state.update_data(processing=False)
         return
     except Exception:
         logger.exception("Failed to download uploaded video for subtitles")
         await message.answer("Не удалось скачать видео. Попробуй позже или пришли другой файл.")
+        await state.update_data(processing=False)
         return
 
+    await state.update_data(processing=False)
     await _ask_language_choice(message, state, video_path)
 
 
@@ -159,6 +176,7 @@ async def handle_language_choice(callback: CallbackQuery, state: FSMContext) -> 
             "Генерирую субтитры — это может занять пару минут. Держись!"
         )
 
+    await state.update_data(processing=True)
     await state.set_state(SubtitleState.generating)
     ai_service = await _get_ai_service(callback.message)
 
