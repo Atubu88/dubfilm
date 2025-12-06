@@ -40,9 +40,20 @@ class AIProvider(BaseAIProvider):
                 response_format="verbose_json",
             )
 
+        segments = []
+        for segment in getattr(response, "segments", []) or []:
+            segments.append(
+                {
+                    "start": getattr(segment, "start", 0.0),
+                    "end": getattr(segment, "end", getattr(segment, "start", 0.0)),
+                    "text": getattr(segment, "text", ""),
+                }
+            )
+
         return {
             "text": response.text,
             "language": response.language,
+            "segments": segments,
         }
 
     # ============================================================
@@ -86,9 +97,18 @@ class AIProvider(BaseAIProvider):
                     status = result["status"]
 
                     if status == "completed":
+                        audio_duration = float(result.get("audio_duration", 0))
+                        segments = [
+                            {
+                                "start": 0.0,
+                                "end": audio_duration,
+                                "text": result.get("text", ""),
+                            }
+                        ]
                         return {
                             "text": result["text"],
                             "language": result.get("language_code", "unknown"),
+                            "segments": segments,
                         }
 
                     if status == "error":
