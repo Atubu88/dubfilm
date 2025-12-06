@@ -7,7 +7,6 @@ from ai.service import AIService
 from ai.provider import AIProvider
 from config import BOT_TOKEN, OPENAI_CHAT_MODEL, OPENAI_WHISPER_MODEL
 from handlers.media import router as media_router
-from handlers.search import router as search_router
 from handlers.start import router as start_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -31,7 +30,6 @@ async def main():
     bot.ai_service = ai_service
 
     dp.include_router(start_router)
-    dp.include_router(search_router)
     dp.include_router(media_router)
 
     logger.info("🤖 Bot started")

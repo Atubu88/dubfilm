@@ -15,7 +15,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini").strip()
 OPENAI_WHISPER_MODEL = os.getenv("OPENAI_WHISPER_MODEL", "whisper-1").strip()
-OPENAI_SEARCH_MODEL = os.getenv("OPENAI_SEARCH_MODEL", "gpt-4o-mini-search-preview").strip()
 
 # =========================
 # ASSEMBLYAI
@@ -35,7 +34,6 @@ if TRANSCRIBE_PROVIDER not in ("whisper", "assemblyai"):
 print("🔧 CONFIG LOADED:")
 print(f"   🧠 GPT Model: {OPENAI_CHAT_MODEL}")
 print(f"   🎙 Transcribe Provider: {TRANSCRIBE_PROVIDER}")
-print(f"   🔎 Search Model: {OPENAI_SEARCH_MODEL}")
 
 if TRANSCRIBE_PROVIDER == "whisper":
     print(f"   🎧 Whisper Model: {OPENAI_WHISPER_MODEL}")
