@@ -14,6 +14,7 @@ from config import DEFAULT_TRANSLATION_CHOICES
 from pipelines.summary import run_summary
 from pipelines.transcribe import run_transcription
 from pipelines.translate import run_translation
+from handlers.subtitles import SubtitleState
 from services.audio import MAX_FILE_SIZE_BYTES, get_media_size, prepare_audio_file
 from services.downloader import download_audio_from_url, is_supported_media_url
 
@@ -176,6 +177,15 @@ async def _translate_and_summarize(
 
 @router.message(F.audio | F.voice | F.video | F.video_note | F.document)
 async def handle_media(message: Message, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    if current_state in {
+        SubtitleState.waiting_for_video.state,
+        SubtitleState.choosing_subtitle_language.state,
+        SubtitleState.generating.state,
+        SubtitleState.sending_result.state,
+    }:
+        return
+
     data = await state.get_data()
     if data.get("processing"):
         await message.answer("Я уже обрабатываю предыдущий запрос, подожди, пожалуйста.")
@@ -209,6 +219,15 @@ async def handle_media(message: Message, state: FSMContext) -> None:
 
 @router.message(F.text.regexp(URL_PATTERN))
 async def handle_media_links(message: Message, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    if current_state in {
+        SubtitleState.waiting_for_video.state,
+        SubtitleState.choosing_subtitle_language.state,
+        SubtitleState.generating.state,
+        SubtitleState.sending_result.state,
+    }:
+        return
+
     data = await state.get_data()
     if data.get("processing"):
         return
