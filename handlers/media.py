@@ -37,6 +37,7 @@ LANG_MAP = {
     "English": "english",
     "Arabic": "arabic",
     "Uzbek": "uzbek",
+    "Russian": "russian",
 }
 
 
