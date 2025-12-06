@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from aiogram import F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -175,17 +176,16 @@ async def _translate_and_summarize(
     await state.clear()
 
 
-@router.message(F.audio | F.voice | F.video | F.video_note | F.document)
+@router.message(
+    ~StateFilter(
+        SubtitleState.waiting_for_video,
+        SubtitleState.choosing_subtitle_language,
+        SubtitleState.generating,
+        SubtitleState.sending_result,
+    ),
+    F.audio | F.voice | F.video | F.video_note | F.document,
+)
 async def handle_media(message: Message, state: FSMContext) -> None:
-    current_state = await state.get_state()
-    if current_state in {
-        SubtitleState.waiting_for_video.state,
-        SubtitleState.choosing_subtitle_language.state,
-        SubtitleState.generating.state,
-        SubtitleState.sending_result.state,
-    }:
-        return
-
     data = await state.get_data()
     if data.get("processing"):
         await message.answer("Я уже обрабатываю предыдущий запрос, подожди, пожалуйста.")
@@ -217,17 +217,16 @@ async def handle_media(message: Message, state: FSMContext) -> None:
         await state.update_data(processing=False)
 
 
-@router.message(F.text.regexp(URL_PATTERN))
+@router.message(
+    ~StateFilter(
+        SubtitleState.waiting_for_video,
+        SubtitleState.choosing_subtitle_language,
+        SubtitleState.generating,
+        SubtitleState.sending_result,
+    ),
+    F.text.regexp(URL_PATTERN),
+)
 async def handle_media_links(message: Message, state: FSMContext) -> None:
-    current_state = await state.get_state()
-    if current_state in {
-        SubtitleState.waiting_for_video.state,
-        SubtitleState.choosing_subtitle_language.state,
-        SubtitleState.generating.state,
-        SubtitleState.sending_result.state,
-    }:
-        return
-
     data = await state.get_data()
     if data.get("processing"):
         return
