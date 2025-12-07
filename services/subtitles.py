@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -94,27 +95,12 @@ async def translate_segments(
     target_language: str,
     ai_service: AIService,
 ) -> list[SubtitleSegment]:
-    translated_segments: list[SubtitleSegment] = []
-    for segment in segments:
-        try:
-            translated_text = await ai_service.translate_text(
-                text=segment.text,
-                source_language=source_language,
-                target_language=target_language,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to translate subtitle segment from %s to %s",
-                source_language,
-                target_language,
-            )
-            raise
-
-        translated_segments.append(
-            SubtitleSegment(start=segment.start, end=segment.end, text=translated_text)
-        )
-
-    return translated_segments
+    return await batch_translate_segments(
+        segments=segments,
+        source_language=source_language,
+        target_language=target_language,
+        ai_service=ai_service,
+    )
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -133,6 +119,66 @@ def build_srt_content(segments: list[SubtitleSegment]) -> str:
         end_ts = _format_timestamp(segment.end if segment.end > segment.start else segment.start + 2)
         lines.extend([str(idx), f"{start_ts} --> {end_ts}", segment.text.strip(), ""])
     return "\n".join(lines).strip() + "\n"
+
+
+async def batch_translate_segments(
+    segments: list[SubtitleSegment],
+    source_language: str,
+    target_language: str,
+    ai_service: AIService,
+) -> list[SubtitleSegment]:
+    if not segments:
+        return []
+
+    numbered_texts: list[str] = []
+    for idx, segment in enumerate(segments, start=1):
+        segment_text = (segment.text or "").strip()
+        numbered_texts.append(f"[{idx}] {segment_text}")
+
+    prompt = (
+        "Переведи каждый пункт списка на {target_language}.\n"
+        "Сохрани нумерацию и порядок.\n"
+        "Не добавляй комментариев.\n"
+        "Не объединяй строки.\n"
+        "Формат ответа строго:\n\n"
+        "[1] перевод\n"
+        "[2] перевод\n"
+        "[3] перевод\n\n"
+        "{texts}"
+    ).format(target_language=target_language, texts="\n".join(numbered_texts))
+
+    try:
+        translated_response = await ai_service.translate_text(
+            text=prompt,
+            source_language=source_language,
+            target_language=target_language,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to translate subtitle batch from %s to %s",
+            source_language,
+            target_language,
+        )
+        raise
+
+    translations: dict[int, str] = {}
+    for match in re.finditer(
+        r"\[(\d+)\]\s*(.*?)(?=(?:\n\[\d+\]\s)|\Z)",
+        translated_response.strip(),
+        flags=re.DOTALL,
+    ):
+        index = int(match.group(1))
+        text = match.group(2).strip()
+        translations[index] = text
+
+    translated_segments: list[SubtitleSegment] = []
+    for idx, segment in enumerate(segments, start=1):
+        translated_text = translations.get(idx, segment.text)
+        translated_segments.append(
+            SubtitleSegment(start=segment.start, end=segment.end, text=translated_text)
+        )
+
+    return translated_segments
 
 from uuid import uuid4
 import asyncio
