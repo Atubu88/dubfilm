@@ -134,10 +134,12 @@ def build_srt_content(segments: list[SubtitleSegment]) -> str:
         lines.extend([str(idx), f"{start_ts} --> {end_ts}", segment.text.strip(), ""])
     return "\n".join(lines).strip() + "\n"
 
+from uuid import uuid4
+import asyncio
 
 async def burn_subtitles(video_path: Path, srt_content: str) -> Path:
-    subtitles_path = TEMP_DIR / f"{video_path.stem}_subs_{uuid4().hex}.srt"
-    output_path = TEMP_DIR / f"{video_path.stem}_subtitled_{uuid4().hex}.mp4"
+    subtitles_path = TEMP_DIR / f"subs_{uuid4().hex}.srt"
+    output_path = TEMP_DIR / f"out_{uuid4().hex}.mp4"
 
     logger.info("Writing subtitles to %s", subtitles_path)
     subtitles_path.write_text(srt_content, encoding="utf-8")
@@ -149,24 +151,40 @@ async def burn_subtitles(video_path: Path, srt_content: str) -> Path:
         str(video_path),
         "-vf",
         f"subtitles={subtitles_path.as_posix()}",
+        "-c:v",
+        "libx264",          # ✅ ЖЁСТКО фиксируем кодек
+        "-preset",
+        "veryfast",        # ✅ Ускоряем
+        "-pix_fmt",
+        "yuv420p",         # ✅ Совместимость с Telegram
         "-c:a",
-        "copy",
+        "aac",             # ✅ Аудио перекодируем (НЕ copy!)
         str(output_path),
     )
 
+    logger.info("Starting ffmpeg burn: %s", output_path)
+
     try:
-        stdout, stderr, returncode = await _run_subprocess(*cmd)
+        stdout, stderr, returncode = await _run_subprocess(
+            *cmd,
+            timeout=180,     # ✅ ФАТАЛЬНО ВАЖНО: защита от зависания
+        )
+
         if returncode != 0:
-            logger.error(
-                "ffmpeg failed to burn subtitles into %s: %s", video_path, stderr or stdout
-            )
-            raise RuntimeError(f"ffmpeg failed to burn subtitles: {stderr or stdout}")
+            logger.error("ffmpeg failed: %s", stderr or stdout)
+            raise RuntimeError(stderr or stdout)
+
+    except asyncio.TimeoutError:
+        logger.error("ffmpeg timeout exceeded, killing process")
+        raise RuntimeError("ffmpeg timed out while burning subtitles")
+
     finally:
         try:
             subtitles_path.unlink(missing_ok=True)
         except OSError:
-            logger.warning("Failed to remove temporary subtitles file %s", subtitles_path)
+            pass
 
+    logger.info("Subtitled video successfully created: %s", output_path)
     return output_path
 
 

@@ -8,6 +8,7 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.filters import StateFilter  # ✅ ВАЖНО
 
 from ai.service import AIService
 from config import DEFAULT_TRANSLATION_CHOICES
@@ -55,10 +56,15 @@ async def _send_long_message(message: Message, text: str, chunk_size: int = 3900
         await message.answer(text[start:start + chunk_size])
 
 
-async def _request_translation_language(message: Message, transcription: TranscriptionResult, state: FSMContext) -> None:
+async def _request_translation_language(
+    message: Message,
+    transcription: TranscriptionResult,
+    state: FSMContext,
+) -> None:
     options = ", ".join(DEFAULT_TRANSLATION_CHOICES)
     await state.update_data(text=transcription.text, language=transcription.language)
     await state.set_state(TranslationState.waiting_for_language)
+
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -70,6 +76,7 @@ async def _request_translation_language(message: Message, transcription: Transcr
             for choice in DEFAULT_TRANSLATION_CHOICES
         ]
     )
+
     await message.answer(
         (
             "Готово! Я определил язык: {lang}. На какой язык перевести?\n"
@@ -96,10 +103,16 @@ def _extract_supported_url(text: str) -> str | None:
 
 
 async def _process_audio(
-    message: Message, state: FSMContext, ai_service: AIService, audio_path: Path
+    message: Message,
+    state: FSMContext,
+    ai_service: AIService,
+    audio_path: Path,
 ) -> None:
     try:
-        transcription_data = await run_transcription(audio_path=audio_path, ai_service=ai_service)
+        transcription_data = await run_transcription(
+            audio_path=audio_path,
+            ai_service=ai_service,
+        )
     except Exception:
         logger.exception("Failed to transcribe audio %s", audio_path)
         await message.answer("Не удалось обработать аудио. Попробуй ещё раз или позже.")
@@ -126,7 +139,9 @@ async def _process_audio(
 
 
 async def _translate_and_summarize(
-    message: Message, state: FSMContext, target_language: str
+    message: Message,
+    state: FSMContext,
+    target_language: str,
 ) -> None:
     ai_service = await _get_ai_service(message)
     data: dict[str, Any] = await state.get_data()
@@ -155,7 +170,6 @@ async def _translate_and_summarize(
         ai_service=ai_service,
     )
 
-    # ✅ ИЗМЕНЁН ТОЛЬКО ФОРМАТ СООБЩЕНИЯ
     response = (
         "📝 Суть видео:\n\n"
         "{summary}\n\n"
@@ -174,7 +188,11 @@ async def _translate_and_summarize(
     await state.clear()
 
 
-@router.message(F.audio | F.voice | F.video | F.video_note | F.document)
+# ✅ ВАЖНО: этот хендлер теперь работает ТОЛЬКО БЕЗ FSM-СОСТОЯНИЯ
+@router.message(
+    StateFilter(None),
+    F.audio | F.voice | F.video | F.video_note | F.document,
+)
 async def handle_media(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if data.get("processing"):
@@ -195,19 +213,28 @@ async def handle_media(message: Message, state: FSMContext) -> None:
     await state.update_data(processing=True)
     try:
         await message.answer("Скачиваю и обрабатываю файл, секунду...")
-        audio_path = await prepare_audio_file(bot=message.bot, media=message)
+        audio_path = await prepare_audio_file(
+            bot=message.bot,
+            media=message,
+        )
         await _process_audio(message, state, ai_service, audio_path)
     except Exception:
         logger.exception(
             "Failed to process uploaded media from user %s",
-            message.from_user.id if message.from_user else "unknown"
+            message.from_user.id if message.from_user else "unknown",
         )
-        await message.answer("Не удалось скачать или обработать файл. Проверь его и попробуй снова чуть позже.")
+        await message.answer(
+            "Не удалось скачать или обработать файл. Проверь его и попробуй снова чуть позже."
+        )
     finally:
         await state.update_data(processing=False)
 
 
-@router.message(F.text.regexp(URL_PATTERN))
+# ✅ ВАЖНО: этот хендлер теперь работает ТОЛЬКО БЕЗ FSM-СОСТОЯНИЯ
+@router.message(
+    StateFilter(None),
+    F.text.regexp(URL_PATTERN),
+)
 async def handle_media_links(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if data.get("processing"):
@@ -226,7 +253,9 @@ async def handle_media_links(message: Message, state: FSMContext) -> None:
         await _process_audio(message, state, ai_service, audio_path)
     except Exception:
         logger.exception("Failed to download media from %s", url)
-        await message.answer("Не удалось скачать или обработать ссылку. Проверь её и попробуй снова.")
+        await message.answer(
+            "Не удалось скачать или обработать ссылку. Проверь её и попробуй снова."
+        )
     finally:
         await state.update_data(processing=False)
 
@@ -236,9 +265,17 @@ async def handle_translation_request(message: Message, state: FSMContext) -> Non
     await message.answer("Пожалуйста, выбери язык кнопкой ниже ⬇️")
 
 
-@router.callback_query(TranslationState.waiting_for_language, F.data.startswith("translation:"))
+@router.callback_query(
+    TranslationState.waiting_for_language,
+    F.data.startswith("translation:"),
+)
 async def handle_translation_button(callback: CallbackQuery, state: FSMContext) -> None:
     target_language = callback.data.split(":", 1)[1].title()
     await callback.answer()
+
     if callback.message:
-        await _translate_and_summarize(callback.message, state, target_language)
+        await _translate_and_summarize(
+            callback.message,
+            state,
+            target_language,
+        )
