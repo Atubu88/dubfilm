@@ -4,6 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from handlers.subtitles import start_subtitles
+from handlers.subtitles import SubtitleState   # ✅ ВАЖНО: импортируем состояние
 
 router = Router()
 
@@ -44,12 +45,17 @@ async def start(message: Message) -> None:
     )
 
 
+# ───────── AUDIO PIPELINE ─────────
+
 @router.callback_query(F.data == "pipeline:audio_translation")
 async def handle_audio_translation_choice(
     callback: CallbackQuery, state: FSMContext
 ) -> None:
     await callback.answer()
+
+    # ✅ чистим состояние
     await state.clear()
+
     if callback.message:
         await callback.message.answer(
             (
@@ -59,12 +65,17 @@ async def handle_audio_translation_choice(
         )
 
 
+# ───────── VIDEO PIPELINE (TEXT SUMMARY) ─────────
+
 @router.callback_query(F.data == "pipeline:video_translation")
 async def handle_video_translation_choice(
     callback: CallbackQuery, state: FSMContext
 ) -> None:
     await callback.answer()
+
+    # ✅ чистим состояние
     await state.clear()
+
     if callback.message:
         await callback.message.answer(
             (
@@ -74,9 +85,18 @@ async def handle_video_translation_choice(
         )
 
 
+# ───────── SUBTITLES PIPELINE ─────────
+
 @router.callback_query(F.data == "pipeline:subtitles")
-async def handle_subtitles_choice(callback: CallbackQuery, state: FSMContext) -> None:
+async def handle_subtitles_choice(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
     await callback.answer()
-    await state.clear()
+
+    # ❗ ВАЖНО:
+    # ❌ НЕ вызываем state.clear() перед сабтайтлами,
+    #    потому что start_subtitles сам управляет состоянием
+
     if callback.message:
         await start_subtitles(callback.message, state)
