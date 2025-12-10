@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -94,27 +95,12 @@ async def translate_segments(
     target_language: str,
     ai_service: AIService,
 ) -> list[SubtitleSegment]:
-    translated_segments: list[SubtitleSegment] = []
-    for segment in segments:
-        try:
-            translated_text = await ai_service.translate_text(
-                text=segment.text,
-                source_language=source_language,
-                target_language=target_language,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to translate subtitle segment from %s to %s",
-                source_language,
-                target_language,
-            )
-            raise
-
-        translated_segments.append(
-            SubtitleSegment(start=segment.start, end=segment.end, text=translated_text)
-        )
-
-    return translated_segments
+    return await batch_translate_segments(
+        segments=segments,
+        source_language=source_language,
+        target_language=target_language,
+        ai_service=ai_service,
+    )
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -134,6 +120,96 @@ def build_srt_content(segments: list[SubtitleSegment]) -> str:
         lines.extend([str(idx), f"{start_ts} --> {end_ts}", segment.text.strip(), ""])
     return "\n".join(lines).strip() + "\n"
 
+
+async def batch_translate_segments(
+    segments: list[SubtitleSegment],
+    source_language: str,
+    target_language: str,
+    ai_service: AIService,
+) -> list[SubtitleSegment]:
+    if not segments:
+        return []
+
+    if len(segments) > 200:
+        raise RuntimeError("Too many subtitle segments for batch translation")
+
+    numbered_texts: list[str] = []
+    for idx, segment in enumerate(segments, start=1):
+        segment_text = (segment.text or "").strip()
+        # ✅ защита от квадратных скобок
+        segment_text = segment_text.replace("[", "(").replace("]", ")")
+        numbered_texts.append(f"[{idx}] {segment_text}")
+
+    prompt = (
+        f"Переведи каждый пункт списка с {source_language} на {target_language}.\n"
+        "Сохрани нумерацию и порядок.\n"
+        "Не добавляй комментариев.\n"
+        "Не объединяй строки.\n"
+        "Формат ответа строго:\n\n"
+        "[1] перевод\n"
+        "[2] перевод\n"
+        "[3] перевод\n\n"
+        f"{chr(10).join(numbered_texts)}"
+    )
+
+    try:
+        translated_response = await ai_service.translate_text(
+            text=prompt,
+            source_language="auto",   # ✅ ВАЖНО
+            target_language=target_language,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to translate subtitle batch from %s to %s",
+            source_language,
+            target_language,
+        )
+        raise
+
+    translations: dict[int, str] = {}
+    for match in re.finditer(
+        r"\[(\d+)\]\s*(.*?)(?=(?:\n\[\d+\]\s)|\Z)",
+        translated_response.strip(),
+        flags=re.DOTALL,
+    ):
+        index = int(match.group(1))
+        text = match.group(2).strip()
+        translations[index] = text
+
+    if not translations:
+        raise RuntimeError("Batch translation returned empty result")
+
+    translated_segments: list[SubtitleSegment] = []
+    for idx, segment in enumerate(segments, start=1):
+        translated_text = translations.get(idx, segment.text)
+        translated_segments.append(
+            SubtitleSegment(
+                start=segment.start,
+                end=segment.end,
+                text=translated_text,
+            )
+        )
+
+    return translated_segments
+
+async def get_video_resolution(video_path: Path) -> tuple[int, int]:
+    stdout, stderr, returncode = await _run_subprocess(
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=p=0",
+        str(video_path),
+    )
+
+    if returncode != 0:
+        raise RuntimeError(stderr or stdout)
+
+    width, height = map(int, stdout.strip().split(","))
+    return width, height
+
+
+
 from uuid import uuid4
 import asyncio
 
@@ -144,48 +220,60 @@ async def burn_subtitles(video_path: Path, srt_content: str) -> Path:
     logger.info("Writing subtitles to %s", subtitles_path)
     subtitles_path.write_text(srt_content, encoding="utf-8")
 
+    # 🔥 1. Узнаём разрешение видео
+    width, height = await get_video_resolution(video_path)
+
+    # 🔥 2. Динамический размер шрифта
+    if height > width:  # вертикальное
+        fontsize = int(height * 0.025)
+    else:
+        fontsize = int(height * 0.035)
+
+    # 🔥 Ограничения, чтобы не было слишком большого текста
+    fontsize = max(18, min(fontsize, 60))  # от 18 до 60 пикселей
+
+    # 🔥 3. Динамическая обводка
+    outline = max(1, fontsize // 12)
+
+    logger.info(f"Dynamic subtitle style: fontsize={fontsize}, outline={outline}")
+
+    # 🔥 4. FFmpeg команда
     cmd = (
         "ffmpeg",
         "-y",
         "-i",
         str(video_path),
         "-vf",
-        f"subtitles={subtitles_path.as_posix()}",
+        f"subtitles={subtitles_path.as_posix()}:"
+        f"force_style='Fontsize={fontsize},Outline={outline},Shadow=1,"
+        "PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&'",
         "-c:v",
-        "libx264",          # ✅ ЖЁСТКО фиксируем кодек
+        "libx264",
         "-preset",
-        "veryfast",        # ✅ Ускоряем
+        "veryfast",
         "-pix_fmt",
-        "yuv420p",         # ✅ Совместимость с Telegram
+        "yuv420p",
         "-c:a",
-        "aac",             # ✅ Аудио перекодируем (НЕ copy!)
+        "aac",
         str(output_path),
     )
 
-    logger.info("Starting ffmpeg burn: %s", output_path)
+    logger.info("Starting ffmpeg burn")
 
     try:
-        stdout, stderr, returncode = await _run_subprocess(
-            *cmd,
-            timeout=180,     # ✅ ФАТАЛЬНО ВАЖНО: защита от зависания
-        )
+        stdout, stderr, returncode = await _run_subprocess(*cmd, timeout=180)
 
         if returncode != 0:
-            logger.error("ffmpeg failed: %s", stderr or stdout)
             raise RuntimeError(stderr or stdout)
 
     except asyncio.TimeoutError:
-        logger.error("ffmpeg timeout exceeded, killing process")
-        raise RuntimeError("ffmpeg timed out while burning subtitles")
-
+        raise RuntimeError("ffmpeg timed out")
     finally:
-        try:
-            subtitles_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        subtitles_path.unlink(missing_ok=True)
 
-    logger.info("Subtitled video successfully created: %s", output_path)
+    logger.info("Video created: %s", output_path)
     return output_path
+
 
 
 async def download_video_from_url(url: str) -> Path:
