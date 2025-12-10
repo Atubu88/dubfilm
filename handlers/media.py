@@ -218,6 +218,11 @@ async def handle_media(message: Message, state: FSMContext) -> None:
             media=message,
         )
         await _process_audio(message, state, ai_service, audio_path)
+    except ValueError as exc:
+        if str(exc) == "Video too long":
+            await message.answer("Видео слишком длинное. Максимальная длительность — 5 минут.")
+        else:
+            await message.answer("Файл не подходит. Отправь другое видео или аудио до 5 минут.")
     except Exception:
         logger.exception(
             "Failed to process uploaded media from user %s",
@@ -251,6 +256,11 @@ async def handle_media_links(message: Message, state: FSMContext) -> None:
         await message.answer("Скачиваю медиа по ссылке, секунду...")
         audio_path = await download_audio_from_url(url)
         await _process_audio(message, state, ai_service, audio_path)
+    except ValueError as exc:
+        if str(exc) == "Video too long":
+            await message.answer("Видео слишком длинное. Максимальная длительность — 5 минут.")
+        else:
+            await message.answer("Не удалось скачать или обработать ссылку. Проверь её и попробуй снова.")
     except Exception:
         logger.exception("Failed to download media from %s", url)
         await message.answer(
