@@ -15,6 +15,7 @@ from pipelines.subtitles import run_subtitles_pipeline
 from services.audio import MAX_FILE_SIZE_BYTES
 from services.downloader import is_supported_media_url
 from services.subtitles import download_video_from_url
+from services.video_duration import validate_video_duration
 
 router = Router()
 logger = logging.getLogger(__name__)
@@ -76,7 +77,18 @@ async def _prepare_video_from_message(message: Message) -> Path:
     if file_size and file_size > MAX_FILE_SIZE_BYTES:
         raise ValueError("File exceeds maximum size")
 
-    return await _download_video_file(message.bot, file_id, suffix)
+    video_path = await _download_video_file(message.bot, file_id, suffix)
+
+    try:
+        await validate_video_duration(video_path)
+    except Exception:
+        try:
+            video_path.unlink(missing_ok=True)
+        except OSError:
+            logger.debug("Failed to remove oversized video %s", video_path)
+        raise
+
+    return video_path
 
 
 async def _ask_language_choice(message: Message, state: FSMContext, video_path: Path) -> None:
@@ -123,6 +135,14 @@ async def handle_video_link(message: Message, state: FSMContext) -> None:
     await message.answer("Скачиваю видео по ссылке, подожди немного...")
     try:
         video_path = await download_video_from_url(url)
+    except ValueError as exc:
+        if str(exc) == "Video too long":
+            await message.answer("Видео слишком длинное. Максимальная длительность — 5 минут.")
+        else:
+            await message.answer("Не удалось скачать видео по ссылке. Попробуй другое или позже.")
+        logger.exception("Failed to download video for subtitles from %s", url)
+        await state.update_data(processing=False)
+        return
     except Exception:
         logger.exception("Failed to download video for subtitles from %s", url)
         await message.answer("Не удалось скачать видео по ссылке. Попробуй другое или позже.")
@@ -144,7 +164,10 @@ async def handle_video_upload(message: Message, state: FSMContext) -> None:
     try:
         video_path = await _prepare_video_from_message(message)
     except ValueError as exc:
-        await message.answer(str(exc))
+        if str(exc) == "Video too long":
+            await message.answer("Видео слишком длинное. Максимальная длительность — 5 минут.")
+        else:
+            await message.answer(str(exc))
         await state.update_data(processing=False)
         return
     except Exception:

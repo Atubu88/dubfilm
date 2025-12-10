@@ -8,6 +8,7 @@ from aiogram import Bot
 from aiogram.types import Message
 
 from config import TEMP_DIR
+from services.video_duration import validate_video_duration
 
 
 logger = logging.getLogger(__name__)
@@ -66,12 +67,18 @@ async def convert_to_wav(source_path: Path) -> Path:
 
 async def prepare_audio_file(bot: Bot, media: Message) -> Path:
     file_id, suffix, file_size = _extract_file_data(media)
+    is_video_media = bool(media.video or media.video_note)
+    if media.document:
+        mime = media.document.mime_type or ""
+        is_video_media = is_video_media or mime.startswith("video/")
     if file_size is not None and file_size > MAX_FILE_SIZE_BYTES:
         raise ValueError("File exceeds maximum allowed size")
 
     raw_path = TEMP_DIR / f"{uuid4()}{suffix}"
     downloaded_path = await _download_file(bot, file_id, raw_path)
     try:
+        if is_video_media:
+            await validate_video_duration(downloaded_path)
         wav_path = await convert_to_wav(downloaded_path)
     finally:
         try:
