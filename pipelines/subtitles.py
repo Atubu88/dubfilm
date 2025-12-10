@@ -9,6 +9,7 @@ from services.subtitles import (
     transcribe_segments,
     translate_segments,
 )
+from services.video_duration import validate_video_duration
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ async def run_subtitles_pipeline(
     ai_service: AIService,
 ) -> Path:
     logger.info("Starting subtitles pipeline for %s to %s", video_path, target_language)
+    await validate_video_duration(video_path)
     audio_path: Path | None = None
     try:
         audio_path = await extract_audio_from_video(video_path)

@@ -8,6 +8,7 @@ from uuid import uuid4
 from ai.service import AIService
 from config import TEMP_DIR
 from services.downloader import is_supported_media_url
+from services.video_duration import validate_video_duration
 
 logger = logging.getLogger(__name__)
 
@@ -210,9 +211,6 @@ async def get_video_resolution(video_path: Path) -> tuple[int, int]:
 
 
 
-from uuid import uuid4
-import asyncio
-
 async def burn_subtitles(video_path: Path, srt_content: str) -> Path:
     subtitles_path = TEMP_DIR / f"subs_{uuid4().hex}.srt"
     output_path = TEMP_DIR / f"out_{uuid4().hex}.mp4"
@@ -301,4 +299,16 @@ async def download_video_from_url(url: str) -> Path:
     if not files:
         raise FileNotFoundError("yt-dlp did not produce any files")
 
-    return max(files, key=lambda p: p.stat().st_size)
+    video_path = max(files, key=lambda p: p.stat().st_size)
+
+    try:
+        await validate_video_duration(video_path)
+    except Exception:
+        try:
+            video_path.unlink(missing_ok=True)
+            video_path.parent.rmdir()
+        except OSError:
+            logger.debug("Failed to clean up oversized video %s", video_path)
+        raise
+
+    return video_path

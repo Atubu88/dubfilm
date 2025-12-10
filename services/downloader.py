@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from config import TEMP_DIR
 from services.audio import convert_to_wav
+from services.video_duration import validate_video_duration
 
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ async def _download_media(url: str) -> Path:
 async def download_audio_from_url(url: str) -> Path:
     media_path = await _download_media(url)
     try:
+        await validate_video_duration(media_path)
         wav_path = await convert_to_wav(media_path)
     finally:
         try:
