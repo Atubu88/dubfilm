@@ -39,4 +39,6 @@ venv/
 
 tmp/
 *.mp4
+*.webm
 *.part
+*.mkv
