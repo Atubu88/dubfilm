@@ -133,24 +133,32 @@ async def handle_video_link(message: Message, state: FSMContext) -> None:
 
     await state.update_data(processing=True)
     await message.answer("Скачиваю видео по ссылке, подожди немного...")
+
     try:
         video_path = await download_video_from_url(url)
+
     except ValueError as exc:
+        # ⛔️ Это НЕ ошибка — просто длинное видео
         if str(exc) == "Video too long":
             await message.answer("Видео слишком длинное. Максимальная длительность — 5 минут.")
         else:
             await message.answer("Не удалось скачать видео по ссылке. Попробуй другое или позже.")
-        logger.exception("Failed to download video for subtitles from %s", url)
+
+        # ⚠️ НЕ ЛОГИРУЕМ exception — потому что это НЕ ошибка
         await state.update_data(processing=False)
         return
+
     except Exception:
+        # ❌ Это настоящая ошибка (yt-dlp, ffmpeg, сеть)
         logger.exception("Failed to download video for subtitles from %s", url)
         await message.answer("Не удалось скачать видео по ссылке. Попробуй другое или позже.")
         await state.update_data(processing=False)
         return
 
+    # ✔ всё хорошо → продолжаем
     await state.update_data(processing=False)
     await _ask_language_choice(message, state, video_path)
+
 
 
 @router.message(SubtitleState.waiting_for_video, F.video | F.document)

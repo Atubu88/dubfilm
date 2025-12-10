@@ -41,7 +41,20 @@ async def get_video_duration(path: Path) -> float:
 
 
 async def validate_video_duration(path: Path, max_seconds: int = 300) -> None:
-    duration = await get_video_duration(path)
+    try:
+        duration = await get_video_duration(path)
+    except Exception:
+        # Если ffprobe не смог получить длительность — считаем это длинным видео
+        raise ValueError("Video too long")
+
     if duration > max_seconds:
         raise ValueError("Video too long")
 
+
+async def validate_media_duration(path: Path, max_seconds: int = 300) -> None:
+    """
+    Универсальная проверка длительности и для аудио, и для видео.
+    """
+    duration = await get_video_duration(path)
+    if duration > max_seconds:
+        raise ValueError("Video too long")

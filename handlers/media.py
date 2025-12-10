@@ -218,21 +218,17 @@ async def handle_media(message: Message, state: FSMContext) -> None:
             media=message,
         )
         await _process_audio(message, state, ai_service, audio_path)
-    except ValueError as exc:
-        if str(exc) == "Video too long":
+
+    except Exception as exc:
+        err = str(exc)
+        if "Video too long" in err:
             await message.answer("Видео слишком длинное. Максимальная длительность — 5 минут.")
         else:
             await message.answer("Файл не подходит. Отправь другое видео или аудио до 5 минут.")
-    except Exception:
-        logger.exception(
-            "Failed to process uploaded media from user %s",
-            message.from_user.id if message.from_user else "unknown",
-        )
-        await message.answer(
-            "Не удалось скачать или обработать файл. Проверь его и попробуй снова чуть позже."
-        )
+
     finally:
         await state.update_data(processing=False)
+
 
 
 # ✅ ВАЖНО: этот хендлер теперь работает ТОЛЬКО БЕЗ FSM-СОСТОЯНИЯ
@@ -256,18 +252,17 @@ async def handle_media_links(message: Message, state: FSMContext) -> None:
         await message.answer("Скачиваю медиа по ссылке, секунду...")
         audio_path = await download_audio_from_url(url)
         await _process_audio(message, state, ai_service, audio_path)
-    except ValueError as exc:
-        if str(exc) == "Video too long":
+
+    except Exception as exc:
+        err = str(exc)
+        if "Video too long" in err:
             await message.answer("Видео слишком длинное. Максимальная длительность — 5 минут.")
         else:
-            await message.answer("Не удалось скачать или обработать ссылку. Проверь её и попробуй снова.")
-    except Exception:
-        logger.exception("Failed to download media from %s", url)
-        await message.answer(
-            "Не удалось скачать или обработать ссылку. Проверь её и попробуй снова."
-        )
+            await message.answer("Не удалось скачать или обработать ссылку. Попробуй другую.")
+
     finally:
         await state.update_data(processing=False)
+
 
 
 @router.message(TranslationState.waiting_for_language)

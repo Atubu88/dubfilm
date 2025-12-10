@@ -9,6 +9,7 @@ from ai.service import AIService
 from config import TEMP_DIR
 from services.downloader import is_supported_media_url
 from services.video_duration import validate_video_duration
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -273,11 +274,29 @@ async def burn_subtitles(video_path: Path, srt_content: str) -> Path:
     return output_path
 
 
-
 async def download_video_from_url(url: str) -> Path:
     if not is_supported_media_url(url):
         raise ValueError("Unsupported media URL")
 
+    # 1️⃣ СНАЧАЛА получаем метаданные, чтобы быстро узнать длительность
+    stdout, stderr, returncode = await _run_subprocess(
+        "yt-dlp",
+        "--dump-json",
+        url,
+        timeout=20,
+    )
+
+    if returncode != 0:
+        raise RuntimeError(stderr or stdout)
+
+    info = json.loads(stdout)
+    duration = float(info.get("duration") or 0)
+
+    # 2️⃣ Если более 5 минут → НЕ СКАЧИВАЕМ видео
+    if duration > 300:
+        raise ValueError("Video too long")
+
+    # 3️⃣ Теперь скачиваем, раз знаем, что не длинное
     download_dir = TEMP_DIR / f"video_{uuid4()}"
     download_dir.mkdir(parents=True, exist_ok=True)
     output_template = download_dir / "%(title)s.%(ext)s"
@@ -285,30 +304,17 @@ async def download_video_from_url(url: str) -> Path:
     stdout, stderr, returncode = await _run_subprocess(
         "yt-dlp",
         "-f",
-        "bv*+ba/b",  # best video + audio fallback to best
+        "bv*+ba/b",
         "-o",
         str(output_template),
         url,
     )
 
     if returncode != 0:
-        logger.error("yt-dlp failed for %s: %s", url, stderr or stdout)
-        raise RuntimeError(f"yt-dlp failed: {stderr or stdout}")
+        raise RuntimeError(stderr or stdout)
 
     files = sorted(download_dir.glob("*"))
     if not files:
-        raise FileNotFoundError("yt-dlp did not produce any files")
+        raise FileNotFoundError("yt-dlp produced no files")
 
-    video_path = max(files, key=lambda p: p.stat().st_size)
-
-    try:
-        await validate_video_duration(video_path)
-    except Exception:
-        try:
-            video_path.unlink(missing_ok=True)
-            video_path.parent.rmdir()
-        except OSError:
-            logger.debug("Failed to clean up oversized video %s", video_path)
-        raise
-
-    return video_path
+    return max(files, key=lambda p: p.stat().st_size)

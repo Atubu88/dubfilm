@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from pathlib import Path
 from urllib.parse import urlparse
@@ -6,8 +7,6 @@ from uuid import uuid4
 
 from config import TEMP_DIR
 from services.audio import convert_to_wav
-from services.video_duration import validate_video_duration
-
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +20,7 @@ SUPPORTED_DOMAINS = (
 )
 
 DOWNLOAD_TIMEOUT = 120
+MAX_DURATION_SEC = 300  # 5 минут
 
 
 def is_supported_media_url(url: str) -> bool:
@@ -36,11 +36,31 @@ async def _run_subprocess(*cmd: str, timeout: float | None = None) -> tuple[str,
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
-        logger.error("Command %s timed out after %.0f seconds", cmd[0], timeout or 0)
         process.kill()
         stdout, stderr = await process.communicate()
         raise TimeoutError(f"{cmd[0]} timed out after {timeout} seconds")
+
     return stdout.decode(), stderr.decode(), process.returncode
+
+
+# 🔥 NEW: проверка длительности до скачивания
+async def _get_duration_from_url(url: str) -> float:
+    stdout, stderr, returncode = await _run_subprocess(
+        "yt-dlp",
+        "--dump-json",
+        url,
+        timeout=20,
+    )
+
+    if returncode != 0:
+        raise RuntimeError(stderr or stdout)
+
+    try:
+        info = json.loads(stdout)
+        duration = float(info.get("duration") or 0)
+        return duration
+    except Exception:
+        raise RuntimeError("Unable to read duration from yt-dlp")
 
 
 async def _download_media(url: str) -> Path:
@@ -51,7 +71,7 @@ async def _download_media(url: str) -> Path:
     stdout, stderr, returncode = await _run_subprocess(
         "yt-dlp",
         "-f",
-        "bestaudio/best",
+        "bv*+ba/b",
         "-o",
         str(output_template),
         url,
@@ -59,27 +79,30 @@ async def _download_media(url: str) -> Path:
     )
 
     if returncode != 0:
-        logger.error("yt-dlp failed for %s: %s", url, stderr or stdout)
-        raise RuntimeError(f"yt-dlp failed: {stderr or stdout}")
+        raise RuntimeError(stderr or stdout)
 
     files = sorted(download_dir.glob("*"))
     if not files:
-        logger.error("yt-dlp produced no files for %s", url)
-        raise FileNotFoundError("yt-dlp did not produce any files")
+        raise FileNotFoundError("yt-dlp produced no files")
 
     return max(files, key=lambda p: p.stat().st_size)
 
 
 async def download_audio_from_url(url: str) -> Path:
+    # 🔥 1. Проверяем длительность ДО скачивания
+    duration = await _get_duration_from_url(url)
+
+    if duration > MAX_DURATION_SEC:
+        raise ValueError("Video too long")
+
+    # 🔥 2. Скачиваем, если видео прошло проверку
     media_path = await _download_media(url)
+
     try:
-        await validate_video_duration(media_path)
         wav_path = await convert_to_wav(media_path)
+        return wav_path
     finally:
         try:
             media_path.unlink(missing_ok=True)
         except OSError:
-            # Directory may not be empty or already removed
             pass
-
-    return wav_path
