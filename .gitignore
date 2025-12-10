@@ -36,3 +36,7 @@ venv/
 
 # KEEP 5_chunks/*.json
 5_chunks/*.txt
+
+tmp/
+*.mp4
+*.part
