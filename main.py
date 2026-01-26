@@ -2,7 +2,8 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
-
+from aiogram.client.session.aiohttp import AiohttpSession
+from config import TELEGRAM_VIDEO_UPLOAD_TIMEOUT
 from ai.service import AIService
 from ai.provider import AIProvider
 from config import BOT_TOKEN, OPENAI_CHAT_MODEL, OPENAI_WHISPER_MODEL
@@ -23,7 +24,12 @@ def setup_ai_service() -> AIService:
 
 
 async def main():
-    bot = Bot(token=BOT_TOKEN)
+    session = AiohttpSession(timeout=TELEGRAM_VIDEO_UPLOAD_TIMEOUT)
+    bot = Bot(
+        token=BOT_TOKEN,
+        session=session,
+    )
+
     dp = Dispatcher()
 
     ai_service = setup_ai_service()
