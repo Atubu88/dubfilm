@@ -8,6 +8,7 @@ load_dotenv()
 # TELEGRAM
 # =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+TELEGRAM_VIDEO_UPLOAD_TIMEOUT = float(os.getenv("TELEGRAM_VIDEO_UPLOAD_TIMEOUT", "300"))
 
 # =========================
 # OPENAI (GPT + WHISPER)

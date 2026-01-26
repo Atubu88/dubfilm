@@ -10,7 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from ai.service import AIService
-from config import DEFAULT_TRANSLATION_CHOICES, TEMP_DIR
+from config import DEFAULT_TRANSLATION_CHOICES, TEMP_DIR, TELEGRAM_VIDEO_UPLOAD_TIMEOUT
 from pipelines.subtitles import run_subtitles_pipeline
 from services.audio import MAX_FILE_SIZE_BYTES
 from services.downloader import is_supported_media_url
@@ -237,7 +237,11 @@ async def handle_language_choice(callback: CallbackQuery, state: FSMContext) -> 
     try:
         if callback.message:
             video_file = FSInputFile(result_path)
-            await callback.message.answer_video(video_file, caption="Готово! Держи видео с субтитрами.")
+            await callback.message.answer_video(
+                video_file,
+                caption="Готово! Держи видео с субтитрами.",
+                request_timeout=TELEGRAM_VIDEO_UPLOAD_TIMEOUT,
+            )
     except Exception:
         logger.exception("Failed to send subtitled video %s", result_path)
         if callback.message:
