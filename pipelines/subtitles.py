@@ -3,9 +3,12 @@ from pathlib import Path
 
 from ai.service import AIService
 from services.subtitles import (
+    apply_time_offset,
     build_srt_content,
     burn_subtitles,
     extract_audio_from_video,
+    get_audio_start_offset,
+    normalize_segments_by_speech_start,
     transcribe_segments,
     translate_segments,
 )
@@ -23,8 +26,12 @@ async def run_subtitles_pipeline(
     await validate_video_duration(video_path)
     audio_path: Path | None = None
     try:
+        audio_offset = await get_audio_start_offset(video_path)
         audio_path = await extract_audio_from_video(video_path)
         segments, detected_language = await transcribe_segments(audio_path, ai_service)
+        if audio_offset:
+            segments = apply_time_offset(segments, audio_offset)
+        segments = normalize_segments_by_speech_start(segments)
         translated_segments = await translate_segments(
             segments=segments,
             source_language=detected_language,

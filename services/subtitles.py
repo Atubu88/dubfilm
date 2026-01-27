@@ -21,6 +21,9 @@ class SubtitleSegment:
     text: str
 
 
+_MEANINGFUL_TEXT_RE = re.compile(r"[A-Za-zА-Яа-я0-9]")
+
+
 async def _run_subprocess(*cmd: str, timeout: float | None = None) -> tuple[str, str, int]:
     logger.debug("Running subprocess: %s", " ".join(cmd))
     process = await asyncio.create_subprocess_exec(
@@ -90,6 +93,98 @@ async def transcribe_segments(audio_path: Path, ai_service: AIService) -> tuple[
 
     return segments, language
 
+
+def apply_time_offset(segments: list[SubtitleSegment], offset: float) -> list[SubtitleSegment]:
+    if offset <= 0:
+        return segments
+
+    return shift_segments(segments, offset)
+
+
+def shift_segments(segments: list[SubtitleSegment], offset: float) -> list[SubtitleSegment]:
+    if offset == 0:
+        return segments
+
+    adjusted_segments: list[SubtitleSegment] = []
+    for segment in segments:
+        start = max(0.0, segment.start + offset)
+        end = max(start, segment.end + offset)
+        adjusted_segments.append(SubtitleSegment(start=start, end=end, text=segment.text))
+    return adjusted_segments
+
+
+def normalize_segments_by_speech_start(
+    segments: list[SubtitleSegment],
+    *,
+    min_start_seconds: float = 1.0,
+    min_meaningful_chars: int = 3,
+) -> list[SubtitleSegment]:
+    speech_start = find_first_meaningful_segment_start(
+        segments,
+        min_meaningful_chars=min_meaningful_chars,
+    )
+
+    if speech_start is None or speech_start < min_start_seconds:
+        return segments
+
+    logger.info(
+        "Normalizing subtitles by speech start at %.2fs (threshold %.2fs)",
+        speech_start,
+        min_start_seconds,
+    )
+    return shift_segments(segments, -speech_start)
+
+
+def find_first_meaningful_segment_start(
+    segments: list[SubtitleSegment],
+    *,
+    min_meaningful_chars: int = 3,
+) -> float | None:
+    for segment in segments:
+        if _is_meaningful_text(segment.text, min_meaningful_chars=min_meaningful_chars):
+            return max(0.0, segment.start)
+    return None
+
+
+def _is_meaningful_text(text: str, *, min_meaningful_chars: int) -> bool:
+    if not text:
+        return False
+    meaningful_chars = _MEANINGFUL_TEXT_RE.findall(text)
+    return len(meaningful_chars) >= min_meaningful_chars
+
+
+async def get_audio_start_offset(video_path: Path) -> float:
+    stdout, stderr, returncode = await _run_subprocess(
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=start_time",
+        "-of",
+        "default=nw=1:nk=1",
+        str(video_path),
+    )
+
+    if returncode != 0:
+        raise RuntimeError(stderr or stdout)
+
+    raw_value = stdout.strip()
+    if not raw_value:
+        return 0.0
+
+    try:
+        offset = float(raw_value)
+    except ValueError:
+        logger.warning("Unexpected audio start_time value: %s", raw_value)
+        return 0.0
+
+    if offset < 0:
+        logger.warning("Audio start_time is negative (%.3f); ignoring.", offset)
+        return 0.0
+
+    return offset
 
 async def translate_segments(
     segments: list[SubtitleSegment],
