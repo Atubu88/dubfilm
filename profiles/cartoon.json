@@ -1,0 +1,10 @@
+{
+  "OPENAI_TTS_VOICE": "alloy",
+  "DUB_TTS_STYLE": "High-energy expressive young male cartoon narration. Strong emotional color, vivid intonation arcs, playful rhythm, and clear emphasis on action words. Sound excited, warm, and animated, with audible smiles and dynamic pacing. Keep pronunciation clean and natural for family listening. Do NOT be monotone. Do NOT sound robotic. Do NOT over-compress emotion into shouting.",
+  "DUB_TTS_MIN_SPEED": 1.05,
+  "DUB_TTS_MAX_SPEED": 1.20,
+  "DUB_TARGET_CHARS_PER_SEC": 10.0,
+  "DUB_MIN_SEGMENT_DURATION": 1.40,
+  "DUB_ORIGINAL_AUDIO_VOLUME": 0.18,
+  "DUB_TTS_AUDIO_VOLUME": 1.08
+}

@@ -19,3 +19,6 @@ class AIService:
             translated_text=translated_text,
             target_language=target_language,
         )
+
+    async def synthesize_speech(self, text: str, *, voice: str | None = None, audio_format: str | None = None) -> bytes:
+        return await self.provider.tts(text=text, voice=voice, audio_format=audio_format)

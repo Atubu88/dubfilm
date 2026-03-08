@@ -9,3 +9,4 @@ pytube
 assemblyai
 srt
 yt-dlp
+ffsubsync

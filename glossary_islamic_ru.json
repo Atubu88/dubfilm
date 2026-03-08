@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "description": "Глоссарий для исламского контента (RU). translate=false => не переводить, оставлять как есть.",
+  "entries": [
+    {"term": "Allah", "preferred": "Аллах", "translate": false},
+    {"term": "Bismillah", "preferred": "Бисмиллях", "translate": false},
+    {"term": "Alhamdulillah", "preferred": "Альхамдулиллях", "translate": false},
+    {"term": "SubhanAllah", "preferred": "Субханаллах", "translate": false},
+    {"term": "Allahu Akbar", "preferred": "Аллаху Акбар", "translate": false},
+    {"term": "InshaAllah", "preferred": "ИншаАллах", "translate": false},
+    {"term": "MashaAllah", "preferred": "МашаАллах", "translate": false},
+    {"term": "Astaghfirullah", "preferred": "Астагфируллах", "translate": false},
+
+    {"term": "Salah", "preferred": "намаз", "forbidden": ["молитвенная практика"]},
+    {"term": "Salat", "preferred": "намаз"},
+    {"term": "Zakat", "preferred": "закят"},
+    {"term": "Sadaqah", "preferred": "садака"},
+    {"term": "Sawm", "preferred": "пост"},
+    {"term": "Ramadan", "preferred": "Рамадан"},
+    {"term": "Hajj", "preferred": "хадж"},
+    {"term": "Umrah", "preferred": "умра"},
+
+    {"term": "Tawhid", "preferred": "таухид"},
+    {"term": "Shirk", "preferred": "ширк"},
+    {"term": "Kufr", "preferred": "куфр"},
+    {"term": "Iman", "preferred": "иман"},
+    {"term": "Ihsan", "preferred": "ихсан"},
+    {"term": "Taqwa", "preferred": "таква"},
+    {"term": "Niyyah", "preferred": "нийя"},
+    {"term": "Dua", "preferred": "дуа"},
+    {"term": "Dhikr", "preferred": "зикр"},
+    {"term": "Sunnah", "preferred": "сунна"},
+    {"term": "Bid'ah", "preferred": "бид'а", "forbidden": ["инновация"]},
+    {"term": "Halal", "preferred": "халяль"},
+    {"term": "Haram", "preferred": "харам"},
+    {"term": "Fard", "preferred": "фард"},
+    {"term": "Wajib", "preferred": "ваджиб"},
+    {"term": "Mustahabb", "preferred": "мустахаб"},
+    {"term": "Makruh", "preferred": "макрух"},
+
+    {"term": "Jannah", "preferred": "Джаннат"},
+    {"term": "Jahannam", "preferred": "Джаханнам"},
+    {"term": "Akhirah", "preferred": "Ахират"},
+    {"term": "Qiyamah", "preferred": "Судный день"},
+    {"term": "Barakah", "preferred": "баракат"},
+    {"term": "Rizq", "preferred": "ризк"},
+    {"term": "Fitnah", "preferred": "фитна", "forbidden": ["скандал"]},
+    {"term": "Jihad", "preferred": "джихад", "forbidden": ["священная война"]},
+
+    {"term": "Quran", "preferred": "Коран"},
+    {"term": "Ayah", "preferred": "аят"},
+    {"term": "Surah", "preferred": "сура"},
+    {"term": "Hadith", "preferred": "хадис"},
+    {"term": "Tafsir", "preferred": "тафсир"},
+    {"term": "Fiqh", "preferred": "фикх"},
+    {"term": "Shariah", "preferred": "шариат"},
+
+    {"term": "Rasulullah", "preferred": "Посланник Аллаха", "translate": false},
+    {"term": "Muhammad", "preferred": "Мухаммад"},
+    {"term": "Abu Bakr", "preferred": "Абу Бакр"},
+    {"term": "Umar ibn al-Khattab", "preferred": "Умар ибн аль-Хаттаб"},
+    {"term": "Uthman ibn Affan", "preferred": "Усман ибн Аффан"},
+    {"term": "Ali ibn Abi Talib", "preferred": "Али ибн Абу Талиб"}
+  ],
+  "rules": {
+    "quran_ayahs": {
+      "translate": false,
+      "note": "Аяты Корана не переводить; оставлять в оригинале."
+    },
+    "style": {
+      "tone": "уважительный, понятный мусульманской аудитории",
+      "avoid": ["сленг", "ирония в религиозном контексте", "секулярные перефразировки терминов"]
+    }
+  }
+}

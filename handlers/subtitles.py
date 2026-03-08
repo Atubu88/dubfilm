@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from pathlib import Path
@@ -14,7 +15,7 @@ from config import DEFAULT_TRANSLATION_CHOICES, TEMP_DIR, TELEGRAM_VIDEO_UPLOAD_
 from pipelines.subtitles import run_subtitles_pipeline
 from services.audio import MAX_FILE_SIZE_BYTES
 from services.downloader import is_supported_media_url
-from services.subtitles import download_video_from_url
+from services.subtitles import _run_subprocess, download_video_from_url
 from services.video_duration import validate_video_duration
 
 router = Router()
@@ -58,8 +59,46 @@ async def _download_video_file(bot, file_id: str, suffix: str) -> Path:
     destination = TEMP_DIR / f"subtitle_{uuid4()}{suffix}"
     file = await bot.get_file(file_id)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    await bot.download_file(file.file_path, destination)
-    return destination
+
+    # 1) Primary path: aiogram helper with retries
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            await bot.download_file(
+                file.file_path,
+                destination,
+            )
+            return destination
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Video download attempt %d/3 failed for %s: %s",
+                attempt,
+                file_id,
+                exc,
+            )
+            await asyncio.sleep(1.2 * attempt)
+
+    # 2) Fallback path: direct Telegram file URL streaming
+    # This helps when aiogram stream gets cancelled/timeouts on unstable links.
+    import aiohttp
+
+    file_url = f"https://api.telegram.org/file/bot{bot.token}/{file.file_path}"
+    timeout = aiohttp.ClientTimeout(total=max(600, int(TELEGRAM_VIDEO_UPLOAD_TIMEOUT * 2)))
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(file_url) as resp:
+                resp.raise_for_status()
+                with destination.open("wb") as f:
+                    async for chunk in resp.content.iter_chunked(1024 * 256):
+                        if chunk:
+                            f.write(chunk)
+        return destination
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to download video after retries (aiogram + fallback): {exc}; last_aiogram_error={last_error}"
+        )
 
 
 async def _prepare_video_from_message(message: Message) -> Path:
@@ -89,6 +128,54 @@ async def _prepare_video_from_message(message: Message) -> Path:
         raise
 
     return video_path
+
+
+async def _compress_for_telegram(input_path: Path) -> Path | None:
+    """Try to compress oversized video under Telegram bot-safe limit."""
+    size_mb = input_path.stat().st_size / (1024 * 1024)
+    if size_mb <= 49:
+        return input_path
+
+    attempts = [
+        ("720", "28", "128k"),
+        ("540", "30", "96k"),
+    ]
+
+    for idx, (width, crf, audio_bitrate) in enumerate(attempts, start=1):
+        out_path = TEMP_DIR / f"subs_send_{idx}_{uuid4().hex}.mp4"
+        stdout, stderr, code = await _run_subprocess(
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(input_path),
+            "-vf",
+            f"scale='min({width},iw)':-2:flags=lanczos",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            crf,
+            "-c:a",
+            "aac",
+            "-b:a",
+            audio_bitrate,
+            "-movflags",
+            "+faststart",
+            str(out_path),
+            timeout=600,
+        )
+        if code != 0:
+            logger.warning("Subtitles compress attempt %d failed: %s", idx, stderr or stdout)
+            out_path.unlink(missing_ok=True)
+            continue
+
+        out_size_mb = out_path.stat().st_size / (1024 * 1024)
+        logger.info("Subtitles compress attempt %d result size: %.2f MB", idx, out_size_mb)
+        if out_size_mb <= 49:
+            return out_path
+
+    return None
 
 
 async def _ask_language_choice(message: Message, state: FSMContext, video_path: Path) -> None:
@@ -234,14 +321,74 @@ async def handle_language_choice(callback: CallbackQuery, state: FSMContext) -> 
 
     await state.set_state(SubtitleState.sending_result)
 
+    compressed_path: Path | None = None
     try:
         if callback.message:
-            video_file = FSInputFile(result_path)
-            await callback.message.answer_video(
-                video_file,
-                caption="Готово! Держи видео с субтитрами.",
-                request_timeout=TELEGRAM_VIDEO_UPLOAD_TIMEOUT,
-            )
+            file_size_mb = result_path.stat().st_size / (1024 * 1024)
+            logger.info("Subtitles result size: %.2f MB (%s)", file_size_mb, result_path)
+
+            send_path = result_path
+            if file_size_mb > 49:
+                compressed_path = await _compress_for_telegram(result_path)
+                if compressed_path is None:
+                    await callback.message.answer(
+                        f"Итоговое видео слишком большое для отправки ботом ({file_size_mb:.1f} MB). "
+                        "Даже после сжатия не уложилось в лимит."
+                    )
+                    return
+                send_path = compressed_path
+                send_size_mb = send_path.stat().st_size / (1024 * 1024)
+                logger.info("Subtitles compressed result size: %.2f MB (%s)", send_size_mb, send_path)
+
+            # Sending large videos can fail on unstable network (Broken pipe / ClientOSError).
+            # Retry a few times with increasing timeout.
+            last_error: Exception | None = None
+            too_large_error = False
+            for attempt in range(1, 4):
+                try:
+                    video_file = FSInputFile(send_path)
+                    await callback.message.answer_video(
+                        video_file,
+                        caption="Готово! Держи видео с субтитрами.",
+                        request_timeout=max(600, int(TELEGRAM_VIDEO_UPLOAD_TIMEOUT * attempt)),
+                    )
+                    logger.info("VIDEO_DONE mode=subtitles send=video path=%s", send_path)
+                    last_error = None
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if "Request Entity Too Large" in str(exc):
+                        too_large_error = True
+                    logger.warning(
+                        "Send video attempt %d/3 failed for %s: %s",
+                        attempt,
+                        send_path,
+                        exc,
+                    )
+                    if too_large_error:
+                        break
+                    await asyncio.sleep(1.5 * attempt)
+
+            if last_error is not None and not too_large_error:
+                # Fallback: send as document (often more stable than streamed video)
+                try:
+                    doc_file = FSInputFile(send_path)
+                    await callback.message.answer_document(
+                        doc_file,
+                        caption="Готово! Видео с субтитрами (документ).",
+                        request_timeout=max(900, int(TELEGRAM_VIDEO_UPLOAD_TIMEOUT * 3)),
+                    )
+                    logger.info("VIDEO_DONE mode=subtitles send=document path=%s", send_path)
+                    last_error = None
+                except Exception as doc_exc:
+                    logger.warning("Document fallback failed for %s: %s", send_path, doc_exc)
+
+            if last_error is not None:
+                if too_large_error:
+                    await callback.message.answer(
+                        "Не удалось отправить: файл слишком большой для Telegram Bot API."
+                    )
+                raise last_error
     except Exception:
         logger.exception("Failed to send subtitled video %s", result_path)
         if callback.message:
@@ -253,6 +400,8 @@ async def handle_language_choice(callback: CallbackQuery, state: FSMContext) -> 
             logger.debug("Failed to remove source video %s", video_path_str)
         try:
             result_path.unlink(missing_ok=True)
+            if compressed_path and compressed_path != result_path:
+                compressed_path.unlink(missing_ok=True)
         except OSError:
             logger.debug("Failed to remove subtitled video %s", result_path)
         await state.clear()

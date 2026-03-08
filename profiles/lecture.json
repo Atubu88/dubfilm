@@ -1,0 +1,10 @@
+{
+  "OPENAI_TTS_VOICE": "onyx",
+  "DUB_TTS_STYLE": "Speak like a passionate lecturer speaking on stage to a large auditorium.\nProject your voice with strong energy and conviction.\nUse dynamic and expressive intonation with dramatic emphasis on important words.\nSound excited and engaged as if sharing a fascinating discovery.\nAvoid calm or soothing delivery.\nMaintain strong vocal energy and enthusiasm throughout the speech.",
+  "DUB_TTS_MIN_SPEED": 1.04,
+  "DUB_TTS_MAX_SPEED": 1.20,
+  "DUB_TARGET_CHARS_PER_SEC": 15.5,
+  "DUB_MIN_SEGMENT_DURATION": 1.40,
+  "DUB_ORIGINAL_AUDIO_VOLUME": 0.18,
+  "DUB_TTS_AUDIO_VOLUME": 1.04
+}

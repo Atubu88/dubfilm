@@ -2,7 +2,7 @@ import asyncio
 from pathlib import Path
 
 
-FFPROBE_CMD = (
+FFPROBE_STREAM_CMD = (
     "ffprobe",
     "-v",
     "error",
@@ -14,10 +14,20 @@ FFPROBE_CMD = (
     "default=noprint_wrappers=1:nokey=1",
 )
 
+FFPROBE_FORMAT_CMD = (
+    "ffprobe",
+    "-v",
+    "error",
+    "-show_entries",
+    "format=duration",
+    "-of",
+    "default=noprint_wrappers=1:nokey=1",
+)
 
-async def get_video_duration(path: Path) -> float:
+
+async def _run_ffprobe_duration(cmd: tuple[str, ...], path: Path) -> float | None:
     process = await asyncio.create_subprocess_exec(
-        *FFPROBE_CMD,
+        *cmd,
         str(path),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -25,36 +35,50 @@ async def get_video_duration(path: Path) -> float:
     stdout, stderr = await process.communicate()
 
     if process.returncode != 0:
-        error_output = stderr.decode() or stdout.decode()
-        raise RuntimeError(f"ffprobe failed to read duration: {error_output}")
+        return None
 
-    output = stdout.decode().strip()
+    output = (stdout.decode() or "").strip()
     try:
-        duration = float(output)
+        value = float(output)
     except (TypeError, ValueError):
-        raise RuntimeError("Unable to determine video duration") from None
+        return None
 
-    if duration <= 0:
-        raise RuntimeError("Unable to determine video duration")
+    if value <= 0:
+        return None
 
-    return duration
+    return value
 
 
-async def validate_video_duration(path: Path, max_seconds: int = 300) -> None:
+async def get_video_duration(path: Path) -> float:
+    # 1) Try stream duration (often works for mp4)
+    duration = await _run_ffprobe_duration(FFPROBE_STREAM_CMD, path)
+    if duration is not None:
+        return duration
+
+    # 2) Fallback to container format duration (more reliable for webm)
+    duration = await _run_ffprobe_duration(FFPROBE_FORMAT_CMD, path)
+    if duration is not None:
+        return duration
+
+    raise RuntimeError("Unable to determine video duration")
+
+
+async def validate_video_duration(path: Path, max_seconds: int = 0) -> None:
     try:
         duration = await get_video_duration(path)
-    except Exception:
-        # Если ffprobe не смог получить длительность — считаем это длинным видео
+    except Exception as exc:
+        raise ValueError(f"Cannot read video duration: {exc}")
+
+    # max_seconds <= 0 means "no limit"
+    if max_seconds and max_seconds > 0 and duration > max_seconds:
         raise ValueError("Video too long")
 
-    if duration > max_seconds:
-        raise ValueError("Video too long")
 
-
-async def validate_media_duration(path: Path, max_seconds: int = 300) -> None:
+async def validate_media_duration(path: Path, max_seconds: int = 0) -> None:
     """
     Универсальная проверка длительности и для аудио, и для видео.
+    max_seconds <= 0 => без лимита.
     """
     duration = await get_video_duration(path)
-    if duration > max_seconds:
+    if max_seconds and max_seconds > 0 and duration > max_seconds:
         raise ValueError("Video too long")

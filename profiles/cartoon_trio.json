@@ -1,0 +1,12 @@
+{
+  "OPENAI_TTS_VOICE": "ash",
+  "DUB_TTS_STYLE": "High-energy expressive young male cartoon narration. Strong emotional color, vivid intonation arcs, playful rhythm, and clear emphasis on action words. Family-friendly and natural.",
+  "DUB_MULTI_VOICE": "1",
+  "DUB_MULTI_VOICE_LIST": "ash,echo,alloy",
+  "DUB_TTS_MIN_SPEED": 1.02,
+  "DUB_TTS_MAX_SPEED": 1.17,
+  "DUB_TARGET_CHARS_PER_SEC": 10.2,
+  "DUB_MIN_SEGMENT_DURATION": 1.40,
+  "DUB_ORIGINAL_AUDIO_VOLUME": 0.18,
+  "DUB_TTS_AUDIO_VOLUME": 1.08
+}

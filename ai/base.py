@@ -15,3 +15,7 @@ class BaseAIProvider(ABC):
     @abstractmethod
     async def summarize(self, original_text: str, translated_text: str, target_language: str) -> str:
         """Summarize original_text using translated_text context in target_language."""
+
+    @abstractmethod
+    async def tts(self, text: str, *, voice: str | None = None, audio_format: str | None = None) -> bytes:
+        """Synthesize speech from text and return raw audio bytes."""

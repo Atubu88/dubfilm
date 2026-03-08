@@ -1,0 +1,13 @@
+{
+  "OPENAI_TTS_VOICE": "onyx",
+  "DUB_TTS_STYLE": "Expressive cinematic dubbing. Clear articulation, emotional contrast, no monotone.",
+  "DUB_MULTI_VOICE": "1",
+  "DUB_MULTI_VOICE_LIST": "onyx,shimmer,cedar,verse,marin,echo,alloy",
+  "DUB_MULTI_VOICE_MAP": "A:onyx,B:shimmer,C:cedar,D:verse,E:marin,F:echo,G:alloy",
+  "DUB_TTS_MIN_SPEED": 1.00,
+  "DUB_TTS_MAX_SPEED": 1.16,
+  "DUB_TARGET_CHARS_PER_SEC": 10.4,
+  "DUB_MIN_SEGMENT_DURATION": 1.40,
+  "DUB_ORIGINAL_AUDIO_VOLUME": 0.18,
+  "DUB_TTS_AUDIO_VOLUME": 1.10
+}

@@ -38,6 +38,10 @@ venv/
 5_chunks/*.txt
 
 tmp/
+logs/
+out/
+voice_samples/
+voice_samples_all.tar.gz
 *.mp4
 *.webm
 *.part

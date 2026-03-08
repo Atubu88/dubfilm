@@ -75,7 +75,7 @@ async def prepare_audio_file(bot: Bot, media: Message) -> Path:
     is_audio_media = bool(media.audio or media.voice)
 
     if media.document:
-        mime = message.document.mime_type or ""
+        mime = media.document.mime_type or ""
         is_video_media = is_video_media or mime.startswith("video/")
         is_audio_media = is_audio_media or mime.startswith("audio/")
 

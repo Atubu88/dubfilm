@@ -4,6 +4,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from handlers.subtitles import start_subtitles
+from handlers.dub import start_dub
+from handlers.transcribe_json import start_transcribe_json
 from handlers.subtitles import SubtitleState   # ✅ ВАЖНО: импортируем состояние
 
 router = Router()
@@ -28,6 +30,18 @@ def _build_start_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="🎞 Видео с субтитрами",
                     callback_data="pipeline:subtitles",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎤 Видео перевод (озвучка)",
+                    callback_data="pipeline:dub",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🧾 Чистая транскрибация (JSON)",
+                    callback_data="pipeline:transcribe_json",
                 )
             ],
         ]
@@ -100,3 +114,23 @@ async def handle_subtitles_choice(
 
     if callback.message:
         await start_subtitles(callback.message, state)
+
+
+@router.callback_query(F.data == "pipeline:dub")
+async def handle_dub_choice(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    await callback.answer()
+    if callback.message:
+        await start_dub(callback.message, state)
+
+
+@router.callback_query(F.data == "pipeline:transcribe_json")
+async def handle_transcribe_json_choice(
+    callback: CallbackQuery,
+    state: FSMContext,
+) -> None:
+    await callback.answer()
+    if callback.message:
+        await start_transcribe_json(callback.message, state)
