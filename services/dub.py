@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -22,6 +23,13 @@ from config import (
 from services.subtitles import SubtitleSegment, _is_likely_quran_ayah, _run_subprocess
 
 logger = logging.getLogger(__name__)
+
+# Safe defaults; can be tuned via env without code edits.
+DUB_TRIM_SPILL_MAX_SEC = float(os.getenv('DUB_TRIM_SPILL_MAX_SEC', '0.28'))
+DUB_SHORT_ONSET_COMP_MS = int(os.getenv('DUB_SHORT_ONSET_COMP_MS', '80'))
+DUB_SHORT_ONSET_THRESHOLD_SEC = float(os.getenv('DUB_SHORT_ONSET_THRESHOLD_SEC', '1.30'))
+DUB_HIGH_FIT_RATIO_THRESHOLD = float(os.getenv('DUB_HIGH_FIT_RATIO_THRESHOLD', '1.60'))
+DUB_HIGH_FIT_MAX_SPEED = float(os.getenv('DUB_HIGH_FIT_MAX_SPEED', '1.26'))
 
 
 async def _timing_rewrite(text: str, target_language: str, budget_chars: int, ai_service: AIService) -> str:
@@ -509,6 +517,10 @@ async def compose_dubbed_video_from_segments(
         seg_dur = max(0.6, float(seg.end - seg.start))
         delay_ms = max(0, int(round(seg.start * 1000)))
 
+        # Compensate TTS onset latency on very short replicas.
+        if seg_dur <= DUB_SHORT_ONSET_THRESHOLD_SEC and DUB_SHORT_ONSET_COMP_MS > 0:
+            delay_ms = max(0, delay_ms - DUB_SHORT_ONSET_COMP_MS)
+
         # Non-overlap guard with safe tail extension:
         # allow a tiny spill into silence (not into next replica) to avoid clipped last words.
         next_start = segment_audios[idx][0].start if idx < len(segment_audios) else None
@@ -526,21 +538,32 @@ async def compose_dubbed_video_from_segments(
 
         play_window = max(0.35, float(available_until) - float(seg.start))
 
+        # If synthesized chunk is longer than slot, allow small spill instead of hard clipping.
+        overflow = max(0.0, float(tts_dur) - play_window)
+        trim_window = play_window
+        if overflow > 0.02:
+            trim_window = min(play_window + DUB_TRIM_SPILL_MAX_SEC, play_window + overflow)
+
         # Fit TTS chunk to segment duration by speed adjustment.
         speed_ratio = 1.0
+        raw_fit_ratio = 1.0
         if tts_dur > 0:
-            speed_ratio = tts_dur / seg_dur
+            raw_fit_ratio = tts_dur / seg_dur
+            speed_ratio = raw_fit_ratio
             # Natural speech guardrails to avoid robotic fast/slow jumps.
             max_speed_cap = min(DUB_TTS_MAX_SPEED, 1.20)
+            # For clearly overlong segments, allow a small extra speed-up (still non-robotic).
+            if raw_fit_ratio >= DUB_HIGH_FIT_RATIO_THRESHOLD:
+                max_speed_cap = min(DUB_TTS_MAX_SPEED, DUB_HIGH_FIT_MAX_SPEED)
             speed_ratio = max(DUB_TTS_MIN_SPEED, min(max_speed_cap, speed_ratio))
         atempo_chain = _build_atempo_chain(speed_ratio)
 
         label = f"d{idx}"
-        fade_start = max(0.0, play_window - 0.08)
+        fade_start = max(0.0, trim_window - 0.08)
         processing_chain = []
         if atempo_chain:
             processing_chain.append(atempo_chain)
-        processing_chain.append(f"atrim=0:{play_window:.3f}")
+        processing_chain.append(f"atrim=0:{trim_window:.3f}")
         processing_chain.append("asetpts=N/SR/TB")
         processing_chain.append(f"afade=t=out:st={fade_start:.3f}:d=0.08")
         processing_chain.append(f"adelay={delay_ms}|{delay_ms}")
@@ -552,7 +575,7 @@ async def compose_dubbed_video_from_segments(
         mix_labels.append(f"[{label}]")
 
         logger.info(
-            "DubDiag: seg#%d start=%.3f end=%.3f next_start=%s seg_dur=%.3f tts_dur=%.3f speed_ratio=%.3f play_window=%.3f delay_ms=%d",
+            "DubDiag: seg#%d start=%.3f end=%.3f next_start=%s seg_dur=%.3f tts_dur=%.3f speed_ratio=%.3f play_window=%.3f trim_window=%.3f overflow=%.3f delay_ms=%d onset_comp_ms=%d",
             idx,
             seg.start,
             seg.end,
@@ -561,7 +584,10 @@ async def compose_dubbed_video_from_segments(
             tts_dur,
             speed_ratio,
             play_window,
+            trim_window,
+            overflow,
             delay_ms,
+            (DUB_SHORT_ONSET_COMP_MS if seg_dur <= DUB_SHORT_ONSET_THRESHOLD_SEC else 0),
         )
 
     mix_inputs = "".join(mix_labels)

@@ -12,6 +12,13 @@ IN_DIR = Path('/home/fanfan/projects/dubfilm/in')
 OUT_DIR = Path('/home/fanfan/projects/dubfilm/out')
 
 
+def _tc(seconds: float) -> str:
+    ms = int(round(max(0.0, seconds) * 1000))
+    m, rem = divmod(ms, 60000)
+    s, msec = divmod(rem, 1000)
+    return f"{m:02}:{s:02}.{msec:03}"
+
+
 def _looks_sentence_end(text: str) -> bool:
     t = (text or '').strip()
     return t.endswith(('.', '!', '?', '؟', '…', ':', ';'))
@@ -130,6 +137,8 @@ async def main() -> None:
             'id': idx,
             'start': seg.start,
             'end': seg.end,
+            'start_tc': _tc(seg.start),
+            'end_tc': _tc(seg.end),
             'text': seg.text,
             'translation_ru': tr_text,
             'cps': round(cps, 2),

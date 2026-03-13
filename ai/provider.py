@@ -16,6 +16,12 @@ from config import (
     ASSEMBLYAI_API_KEY,
     ASSEMBLYAI_SPEECH_MODEL,
     TRANSCRIBE_PROVIDER,
+    PYANNOTE_AUTH_TOKEN,
+    PYANNOTE_MODEL,
+    PYANNOTE_MIN_SPEAKERS,
+    PYANNOTE_MAX_SPEAKERS,
+    PYANNOTEAI_API_KEY,
+    PYANNOTEAI_MODEL,
 )
 
 
@@ -187,6 +193,170 @@ class AIProvider(BaseAIProvider):
             "language": whisper.get("language", asm.get("language", "unknown")),
             "segments": merged_segments,
         }
+
+    # ============================================================
+    # ✅ PYANNOTE DIARIZATION (optional)
+    # ============================================================
+    async def _diarize_with_pyannote(self, file_path: Path) -> Dict[str, Any]:
+        """Return speaker-labeled time segments (no transcription text).
+
+        Requires:
+        - pyannote.audio installed in runtime environment
+        - PYANNOTE_AUTH_TOKEN for gated model access
+        """
+        if not PYANNOTE_AUTH_TOKEN:
+            raise RuntimeError("PYANNOTE_AUTH_TOKEN is missing")
+
+        def _run_sync() -> Dict[str, Any]:
+            try:
+                from pyannote.audio import Pipeline  # type: ignore
+            except Exception as e:
+                raise RuntimeError(f"pyannote.audio is not installed: {e}")
+
+            try:
+                pipeline = Pipeline.from_pretrained(PYANNOTE_MODEL, token=PYANNOTE_AUTH_TOKEN)
+            except TypeError:
+                pipeline = Pipeline.from_pretrained(PYANNOTE_MODEL, use_auth_token=PYANNOTE_AUTH_TOKEN)
+
+            # Best-practice: use CUDA when available
+            try:
+                import torch  # type: ignore
+                if torch.cuda.is_available():
+                    pipeline.to(torch.device("cuda"))
+            except Exception:
+                pass
+
+            diar_kwargs: Dict[str, Any] = {}
+            if PYANNOTE_MIN_SPEAKERS.isdigit():
+                diar_kwargs["min_speakers"] = int(PYANNOTE_MIN_SPEAKERS)
+            if PYANNOTE_MAX_SPEAKERS.isdigit():
+                diar_kwargs["max_speakers"] = int(PYANNOTE_MAX_SPEAKERS)
+
+            # Avoid torchcodec runtime issues by preloading audio in-memory.
+            import torchaudio  # type: ignore
+            waveform, sample_rate = torchaudio.load(str(file_path))
+            # Downmix to mono to match pyannote expectations
+            if waveform.ndim == 2 and waveform.shape[0] > 1:
+                waveform = waveform.mean(dim=0, keepdim=True)
+            # Resample to 16kHz (pyannote common operating point)
+            if sample_rate != 16000:
+                waveform = torchaudio.functional.resample(waveform, sample_rate, 16000)
+                sample_rate = 16000
+
+            diarization = pipeline({"waveform": waveform, "sample_rate": sample_rate}, **diar_kwargs)
+
+            # Map pyannote labels to stable A/B/C... for downstream compatibility
+            labels: Dict[str, str] = {}
+            next_idx = 0
+
+            def to_letter(lbl: str) -> str:
+                nonlocal next_idx
+                if lbl not in labels:
+                    labels[lbl] = chr(ord('A') + next_idx)
+                    next_idx += 1
+                return labels[lbl]
+
+            segments = []
+            for turn, _track, speaker in diarization.itertracks(yield_label=True):
+                st = float(turn.start)
+                en = float(turn.end)
+                if en <= st:
+                    continue
+                segments.append(
+                    {
+                        "start": st,
+                        "end": en,
+                        "text": "",
+                        "speaker": to_letter(str(speaker)),
+                    }
+                )
+
+            return {
+                "text": "",
+                "language": "unknown",
+                "segments": segments,
+                "provider": "pyannote",
+            }
+
+        return await asyncio.to_thread(_run_sync)
+
+    async def _diarize_with_pyannoteai(self, file_path: Path) -> Dict[str, Any]:
+        """Cloud diarization via pyannoteAI SDK.
+
+        Returns speaker-labeled segments in the same shape as local diarization.
+        """
+        if not PYANNOTEAI_API_KEY:
+            raise RuntimeError("PYANNOTEAI_API_KEY is missing")
+
+        def _run_sync() -> Dict[str, Any]:
+            try:
+                from pyannoteai.sdk import Client as PyannoteAIClient  # type: ignore
+            except Exception as e:
+                raise RuntimeError(f"pyannoteai-sdk unavailable: {e}")
+
+            client = PyannoteAIClient(token=PYANNOTEAI_API_KEY)
+
+            # Upload local media and run diarization job
+            media_url = client.upload(file_path)
+
+            diar_kwargs: Dict[str, Any] = {"model": PYANNOTEAI_MODEL}
+            if PYANNOTE_MIN_SPEAKERS.isdigit():
+                diar_kwargs["min_speakers"] = int(PYANNOTE_MIN_SPEAKERS)
+            if PYANNOTE_MAX_SPEAKERS.isdigit():
+                diar_kwargs["max_speakers"] = int(PYANNOTE_MAX_SPEAKERS)
+
+            job_id = client.diarize(media_url=media_url, **diar_kwargs)
+            result = client.retrieve(job_id, every_seconds=5)
+
+            # Normalize possible response schemas
+            payload = result.get("output", result)
+            diar = (
+                payload.get("diarization")
+                or payload.get("segments")
+                or result.get("diarization")
+                or result.get("segments")
+                or []
+            )
+
+            labels: Dict[str, str] = {}
+            next_idx = 0
+
+            def to_letter(lbl: str) -> str:
+                nonlocal next_idx
+                if lbl not in labels:
+                    labels[lbl] = chr(ord('A') + next_idx)
+                    next_idx += 1
+                return labels[lbl]
+
+            segments = []
+            for d in diar:
+                st = float(d.get("start", 0.0))
+                en = float(d.get("end", st))
+                sp = d.get("speaker")
+                if en <= st or sp is None:
+                    continue
+                # pyannoteAI may return ms in some payloads
+                if st > 10000 and en > 10000:
+                    st /= 1000.0
+                    en /= 1000.0
+                segments.append({
+                    "start": st,
+                    "end": en,
+                    "text": "",
+                    "speaker": to_letter(str(sp)),
+                })
+
+            if not segments:
+                raise RuntimeError(f"pyannoteAI returned no diarization segments: {result}")
+
+            return {
+                "text": "",
+                "language": "unknown",
+                "segments": segments,
+                "provider": "pyannoteai",
+            }
+
+        return await asyncio.to_thread(_run_sync)
 
     # ============================================================
     # ✅ ASSEMBLYAI

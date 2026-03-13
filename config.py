@@ -93,6 +93,18 @@ ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY", "").strip()
 ASSEMBLYAI_SPEECH_MODEL = os.getenv("ASSEMBLYAI_SPEECH_MODEL", "universal-2").strip()
 
 # =========================
+# PYANNOTE (optional diarization)
+# =========================
+PYANNOTE_AUTH_TOKEN = os.getenv("PYANNOTE_AUTH_TOKEN", "").strip()
+PYANNOTE_MODEL = os.getenv("PYANNOTE_MODEL", "pyannote/speaker-diarization-3.1").strip()
+PYANNOTE_MIN_SPEAKERS = os.getenv("PYANNOTE_MIN_SPEAKERS", "").strip()
+PYANNOTE_MAX_SPEAKERS = os.getenv("PYANNOTE_MAX_SPEAKERS", "").strip()
+
+# pyannoteAI cloud diarization (recommended fallback when local pyannote is unstable)
+PYANNOTEAI_API_KEY = os.getenv("PYANNOTEAI_API_KEY", "").strip()
+PYANNOTEAI_MODEL = os.getenv("PYANNOTEAI_MODEL", "precision-2").strip()
+
+# =========================
 # TRANSCRIPTION PROVIDER SWITCH
 # =========================
 TRANSCRIBE_PROVIDER = os.getenv("TRANSCRIBE_PROVIDER", "whisper").strip().lower()
@@ -144,6 +156,11 @@ if TRANSCRIBE_PROVIDER == "assemblyai":
         print(f"   🧾 AssemblyAI speech model: {ASSEMBLYAI_SPEECH_MODEL}")
     else:
         print("   ❌ AssemblyAI key is MISSING!")
+
+if PYANNOTE_AUTH_TOKEN:
+    print(f"   🧠 Pyannote diarization token: loaded ({PYANNOTE_MODEL})")
+if PYANNOTEAI_API_KEY:
+    print(f"   ☁️ pyannoteAI key: loaded ({PYANNOTEAI_MODEL})")
 
 if not OPENAI_API_KEY:
     print("   ❌ OPENAI_API_KEY is MISSING! Translation & summary will NOT work.")
