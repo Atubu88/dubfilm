@@ -20,6 +20,12 @@ OPENAI_WHISPER_MODEL = os.getenv("OPENAI_WHISPER_MODEL", "whisper-1").strip()
 OPENAI_TTS_MODEL = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip()
 OPENAI_TTS_VOICE = os.getenv("OPENAI_TTS_VOICE", "alloy").strip()
 OPENAI_TTS_FORMAT = os.getenv("OPENAI_TTS_FORMAT", "mp3").strip()
+
+# Optional ElevenLabs TTS provider
+DUB_TTS_PROVIDER = os.getenv("DUB_TTS_PROVIDER", "openai").strip().lower()
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
+ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "eleven_multilingual_v2").strip()
+ELEVENLABS_DEFAULT_VOICE_ID = os.getenv("ELEVENLABS_DEFAULT_VOICE_ID", "").strip()
 _OPENAI_TTS_VOICE_ENV = OPENAI_TTS_VOICE
 ENABLE_DUB_FLOW = os.getenv("ENABLE_DUB_FLOW", "1").strip() in {"1", "true", "yes", "on"}
 
@@ -134,6 +140,7 @@ print("🔧 CONFIG LOADED:")
 print(f"   🧠 GPT Model: {OPENAI_CHAT_MODEL}")
 print(f"   🎙 Transcribe Provider: {TRANSCRIBE_PROVIDER}")
 print(f"   🗣 TTS Model: {OPENAI_TTS_MODEL} ({OPENAI_TTS_VOICE})")
+print(f"   🔊 TTS Provider: {DUB_TTS_PROVIDER}")
 print(f"   🎛 Dub profile: {DUB_PROFILE}")
 if DUB_TTS_STYLE:
     print("   🎭 TTS style: custom profile instructions enabled")
@@ -161,6 +168,8 @@ if PYANNOTE_AUTH_TOKEN:
     print(f"   🧠 Pyannote diarization token: loaded ({PYANNOTE_MODEL})")
 if PYANNOTEAI_API_KEY:
     print(f"   ☁️ pyannoteAI key: loaded ({PYANNOTEAI_MODEL})")
+if ELEVENLABS_API_KEY:
+    print(f"   ✅ ElevenLabs key loaded ({ELEVENLABS_MODEL_ID})")
 
 if not OPENAI_API_KEY:
     print("   ❌ OPENAI_API_KEY is MISSING! Translation & summary will NOT work.")

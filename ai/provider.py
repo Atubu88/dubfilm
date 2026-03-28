@@ -13,6 +13,10 @@ from config import (
     OPENAI_TTS_VOICE,
     OPENAI_TTS_FORMAT,
     DUB_TTS_STYLE,
+    DUB_TTS_PROVIDER,
+    ELEVENLABS_API_KEY,
+    ELEVENLABS_MODEL_ID,
+    ELEVENLABS_DEFAULT_VOICE_ID,
     ASSEMBLYAI_API_KEY,
     ASSEMBLYAI_SPEECH_MODEL,
     TRANSCRIBE_PROVIDER,
@@ -573,7 +577,7 @@ class AIProvider(BaseAIProvider):
 
         return (response.choices[0].message.content or "").strip()
 
-    async def tts(self, text: str, *, voice: str | None = None, audio_format: str | None = None) -> bytes:
+    async def _tts_openai(self, text: str, *, voice: str | None = None, audio_format: str | None = None) -> bytes:
         model = OPENAI_TTS_MODEL
         selected_voice = voice or OPENAI_TTS_VOICE
         fmt = (audio_format or OPENAI_TTS_FORMAT or "mp3").lower()
@@ -611,3 +615,57 @@ class AIProvider(BaseAIProvider):
             return bytes(buf)
 
         raise RuntimeError("Unexpected TTS response type from OpenAI client")
+
+    async def _tts_elevenlabs(self, text: str, *, voice: str | None = None, audio_format: str | None = None) -> bytes:
+        if not ELEVENLABS_API_KEY:
+            raise RuntimeError("ELEVENLABS_API_KEY is missing")
+
+        requested = (voice or "").strip()
+        # In this project voice may be symbolic (onyx/alloy/etc). ElevenLabs needs voice_id.
+        if requested and (requested.startswith("voice_") or len(requested) >= 16):
+            voice_id = requested
+        else:
+            voice_id = (ELEVENLABS_DEFAULT_VOICE_ID or "").strip()
+        if not voice_id:
+            raise RuntimeError("ELEVENLABS voice id is missing (set ELEVENLABS_DEFAULT_VOICE_ID or pass ElevenLabs voice id)")
+
+        # ElevenLabs accepts output format values like mp3_44100_128.
+        _fmt = (audio_format or "mp3").lower()
+        out_fmt = "mp3_44100_128" if _fmt == "mp3" else "mp3_44100_128"
+
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        headers = {
+            "xi-api-key": ELEVENLABS_API_KEY,
+            "accept": "audio/mpeg",
+            "content-type": "application/json",
+        }
+        payload = {
+            "text": text,
+            "model_id": ELEVENLABS_MODEL_ID,
+            "output_format": out_fmt,
+            "voice_settings": {
+                "stability": 0.45,
+                "similarity_boost": 0.8,
+                "style": 0.15,
+                "use_speaker_boost": True,
+            },
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload, timeout=120) as resp:
+                if resp.status >= 300:
+                    body = await resp.text()
+                    raise RuntimeError(f"ElevenLabs TTS failed: status={resp.status} body={body[:300]}")
+                return await resp.read()
+
+    async def tts(self, text: str, *, voice: str | None = None, audio_format: str | None = None) -> bytes:
+        provider = (DUB_TTS_PROVIDER or "openai").lower()
+        if provider == "elevenlabs":
+            try:
+                return await self._tts_elevenlabs(text=text, voice=voice, audio_format=audio_format)
+            except Exception:
+                # Safe fallback for production continuity:
+                # ElevenLabs voice ids are not valid OpenAI voice names.
+                return await self._tts_openai(text=text, voice=OPENAI_TTS_VOICE, audio_format=audio_format)
+
+        return await self._tts_openai(text=text, voice=voice, audio_format=audio_format)

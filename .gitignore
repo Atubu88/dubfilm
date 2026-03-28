@@ -1,48 +1,104 @@
+# =========================
 # Python
+# =========================
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
+*.so
 
-# Environment
+# =========================
+# Environment / Secrets
+# =========================
 .env
+.env.*
+!.env.example
 .venv/
-env/
 venv/
+env/
 
-# IDE
+# =========================
+# Build / Packaging
+# =========================
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =========================
+# IDE / Editor
+# =========================
 .idea/
 .vscode/
 
+# =========================
 # OS
+# =========================
 .DS_Store
+Thumbs.db
 
-# Input/Output media (large files — exclude)
+# =========================
+# Logs / Temp
+# =========================
+logs/
+*.log
+tmp/
+out/
+out2/
+
+# =========================
+# Input / Output MEDIA (heavy files)
+# =========================
+
+# Raw inputs
 1_input/*.mp4
+1_input/*.mov
+1_input/*.mkv
+
+# Audio
 2_audio/*.wav
+2_audio/*.mp3
+
+# Final outputs
 6_output/*.wav
 6_output/*.mp3
 6_output/*.mp4
+6_output/*.mov
+6_output/*.mkv
 
-# Temporary audio/video chunks (large)
+# Temporary chunks
 5_chunks/*.wav
 
-# Generated subtitles/audio timing (KEEP JSON)
-# KEEP 3_whisper/transcript.json
+# =========================
+# Generated text (KEEP JSON)
+# =========================
+
+# Whisper outputs (keep JSON)
 3_whisper/*.txt
 
-# KEEP 4_translated/translated.json
+# Translations (keep JSON)
 4_translated/*.txt
 
-# KEEP 5_chunks/*.json
+# Chunk metadata (keep JSON)
 5_chunks/*.txt
 
-tmp/
-logs/
-out/
+# =========================
+# Voice / assets
+# =========================
 voice_samples/
 voice_samples_all.tar.gz
-*.mp4
-*.webm
+
+# =========================
+# Video fragments / downloads
+# =========================
 *.part
-*.mkv
+
+in/
+# =========================
+# ⚠️ IMPORTANT
+# =========================
+# НЕ игнорим глобально:
+# *.mp4
+# *.webm
+# *.mkv
+# чтобы можно было хранить демо/пример видео

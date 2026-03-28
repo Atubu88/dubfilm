@@ -29,6 +29,7 @@ FIT_TOLERANCE = float(os.getenv('DUB_FIT_TOLERANCE', '1.08'))
 DUB_TWO_PASS_ENABLE = os.getenv('DUB_TWO_PASS_ENABLE', '0').strip().lower() not in {'0', 'false', 'no', 'off'}
 DUB_PASS2_MAX_SEGMENTS = int(os.getenv('DUB_PASS2_MAX_SEGMENTS', '4'))
 DUB_PASS2_MIN_RATIO = float(os.getenv('DUB_PASS2_MIN_RATIO', '1.20'))
+DUB_SAVE_PASS1_ARTIFACT = os.getenv('DUB_SAVE_PASS1_ARTIFACT', '0').strip().lower() in {'1','true','yes','on'}
 
 logger = logging.getLogger('cartoon_render')
 
@@ -299,7 +300,13 @@ async def main() -> None:
     pass1_tts_items = [(x['seg'], x['path'], x['dur']) for x in pass1_items]
     out_pass1 = await compose_dubbed_video_from_segments(video, pass1_tts_items)
     pass1_video = OUT2_DIR / f'{video.stem}_ru_dub_cartoon_manualjson_pass1_{run_tag}.mp4'
-    out_pass1.replace(pass1_video)
+    if DUB_SAVE_PASS1_ARTIFACT:
+        out_pass1.replace(pass1_video)
+    else:
+        # keep pass1 as temp artifact only for internal compose logic
+        tmp_pass1 = OUT2_DIR / f'.tmp_pass1_{run_tag}.mp4'
+        out_pass1.replace(tmp_pass1)
+        pass1_video = tmp_pass1
 
     accepted_pass2_ids: list[int] = []
     rejected_pass2_ids: list[int] = []
@@ -341,6 +348,10 @@ async def main() -> None:
     latest_final = OUT2_DIR / f'{video.stem}_ru_dub_cartoon_manualjson.mp4'
     shutil.copy2(final, latest_final)
 
+    # Cleanup temporary pass1 artifact when not explicitly requested.
+    if not DUB_SAVE_PASS1_ARTIFACT and pass1_video.exists() and pass1_video.name.startswith('.tmp_pass1_'):
+        pass1_video.unlink(missing_ok=True)
+
     DEBUG_JSON.write_text(json.dumps(debug_rows, ensure_ascii=False, indent=2), encoding='utf-8')
     forced_keep_count = sum(1 for r in debug_rows if r.get('forced_keep'))
     split_count = sum(1 for r in debug_rows if r.get('split_used'))
@@ -352,7 +363,7 @@ async def main() -> None:
         'run_tag': run_tag,
         'output_video': str(final),
         'output_video_latest': str(latest_final),
-        'pass1_video': str(pass1_video),
+        'pass1_video': (str(pass1_video) if DUB_SAVE_PASS1_ARTIFACT else None),
         'segments_total_in_json': len(data.get('segments') or []),
         'segments_skipped_empty_translation': skipped_empty,
         'segments_sent_to_tts': len(segments),
